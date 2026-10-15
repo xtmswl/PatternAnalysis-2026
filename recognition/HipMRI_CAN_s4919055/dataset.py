@@ -1,10 +1,10 @@
-"""HipMRI data utilities: file inventory, one-pair audit and visual preview.
+"""HipMRI inventory, grouped splitting, data audits and visual previews.
 
 Run this saved file on a Rangpur compute node, for example:
     python dataset.py --case B006_Week0
 
 Patient IDs below are inferred from filenames and still require confirmation.
-Splitting and the training Dataset follow inventory and label verification.
+The training Dataset will follow content audit and preprocessing decisions.
 """
 
 import argparse
@@ -105,7 +105,7 @@ def volume_metadata(volume):
     """Read shape and spatial metadata without loading image intensities."""
     return {
         "shape": tuple(volume.shape),
-        "voxel_spacing": tuple(float(v) for v in volume.header.get_zooms()),
+        "voxel_spacing": tuple(float(v) if np.isfinite(v) else None for v in volume.header.get_zooms()),
         "orientation": nib.aff2axcodes(volume.affine),
         "stored_dtype": str(volume.get_data_dtype()),
     }
@@ -169,11 +169,19 @@ def audit_pair(data_root, case_id):
     data_root = Path(data_root)
     image_path = data_root / "semantic_MRs" / f"{case_id}_LFOV.nii.gz"
     mask_path = data_root / "semantic_labels_only" / f"{case_id}_SEMANTIC.nii.gz"
+    return inspect_pair_files(image_path, mask_path, case_id)
+
+
+def inspect_pair_files(image_path, mask_path, case_id, check_intensities=False):
+    """Inspect exact inventory paths; optionally read all MRI intensities.
+
+    This is a data-integrity check, not fitting a normalization or selecting
+    model settings. Original arrays, class codes and source files are unchanged.
+    """
     image = nib.load(image_path)
     mask = nib.load(mask_path)
 
-    # Load only the mask values; preserve their original class codes.
-    label_values = np.unique(np.asanyarray(mask.dataobj))
+    label_values, label_counts = np.unique(np.asanyarray(mask.dataobj), return_counts=True)
     valid_labels = bool(
         label_values.size > 0
         and np.all(np.isfinite(label_values))
@@ -189,14 +197,87 @@ def audit_pair(data_root, case_id):
         "finite_nonnegative_integer_labels": valid_labels,
         "known_label_codes": bool(np.all(np.isin(label_values, list(LABEL_NAMES)))),
     }
+    both_3d = checks["both_3d"]
+    image_spacing = np.asarray(image.header.get_zooms(), dtype=float)
+    mask_spacing = np.asarray(mask.header.get_zooms(), dtype=float)
+    checks["valid_voxel_spacing"] = bool(
+        both_3d and np.all(np.isfinite(image_spacing))
+        and np.all(np.isfinite(mask_spacing))
+        and np.all(image_spacing > 0) and np.all(mask_spacing > 0)
+    )
+    checks["same_voxel_spacing"] = bool(
+        both_3d and np.allclose(image_spacing, mask_spacing, rtol=0, atol=1e-4)
+    )
+    if check_intensities:
+        checks["finite_image_intensities"] = bool(
+            np.all(np.isfinite(np.asanyarray(image.dataobj)))
+        )
     return {
         "case_id": case_id,
         "image": volume_metadata(image),
         "mask": volume_metadata(mask),
         "number_of_mask_values": int(label_values.size),
-        "mask_values_preview": label_values[:20].tolist(),
+        "mask_values_preview": [v.item() if np.isfinite(v) else str(v) for v in label_values[:20]],
+        "mask_value_counts": {str(v): int(n) for v, n in zip(label_values, label_counts)},
         "checks": checks,
     }
+
+
+def audit_all_pairs(inventory, output_path):
+    """Read each listed pair and checkpoint a report every ten cases.
+
+    No scans are dropped, transformed or used to tune a model. A complete
+    report with failures is retained so that problems can be investigated.
+    """
+    if inventory["issues"]:
+        raise ValueError("Resolve inventory issues before the full audit.")
+    pairs = inventory["pairs"]
+    identities = sorted((p["case_id"], p["patient_id"]) for p in pairs)
+    report = {
+        "expected_pairs": len(pairs), "checked_pairs": 0,
+        "passed_pairs": 0, "failed_pairs": 0, "complete": False,
+        "inventory_identity_sha256": hashlib.sha256(
+            json.dumps(identities).encode("utf-8")
+        ).hexdigest(),
+        "label_source": LABEL_SOURCE,
+        "label_names": LABEL_NAMES,
+        "cases": [],
+    }
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def save_report():
+        # Replace only after a complete write, preserving the last checkpoint.
+        temporary = output_path.with_suffix(output_path.suffix + ".tmp")
+        temporary.write_text(json.dumps(report, indent=2, allow_nan=False) + "\n", encoding="utf-8")
+        temporary.replace(output_path)
+
+    save_report()
+    print(f"Reading {len(pairs)} MRI/mask pairs; source files stay unchanged.", flush=True)
+    for number, pair in enumerate(pairs, start=1):
+        try:
+            observation = inspect_pair_files(
+                pair["image_path"], pair["mask_path"], pair["case_id"],
+                check_intensities=True,
+            )
+            passed = all(observation["checks"].values())
+            observation["passed"] = passed
+        except (OSError, ValueError, EOFError, np.linalg.LinAlgError,
+                nib.filebasedimages.ImageFileError) as error:
+            passed = False
+            observation = {"case_id": pair["case_id"], "passed": False,
+                           "error": f"{type(error).__name__}: {error}"}
+        report["cases"].append(observation)
+        report["checked_pairs"] = number
+        report["passed_pairs" if passed else "failed_pairs"] += 1
+        if not passed:
+            print(f"FAIL: {pair['case_id']}", flush=True)
+        if number % 10 == 0 or not passed or number == len(pairs):
+            save_report()
+            print(f"Checked {number}/{len(pairs)}; failures={report['failed_pairs']}", flush=True)
+    report["complete"] = True
+    save_report()
+    return report
 
 
 def main():
@@ -206,10 +287,22 @@ def main():
     parser.add_argument("--overlay", type=Path, help="Save a numeric-label preview PNG.")
     parser.add_argument("--inventory", type=Path, help="Save a full filename-pair inventory JSON.")
     parser.add_argument("--split", type=Path, help="Create a new patient-split JSON; refuses overwrite.")
+    parser.add_argument("--audit-all", type=Path, help="Read all pairs and save an integrity report JSON.")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--val-patients", type=int, default=6)
     parser.add_argument("--test-patients", type=int, default=6)
     args = parser.parse_args()
+
+    if args.audit_all:
+        if args.split or args.inventory or args.overlay:
+            parser.error("Use --audit-all separately from other output modes.")
+        report = audit_all_pairs(build_inventory(args.data_root), args.audit_all)
+        print("Audit complete:", report["complete"])
+        print("Checked pairs:", report["checked_pairs"])
+        print("Passed pairs:", report["passed_pairs"])
+        print("Failed pairs:", report["failed_pairs"])
+        print("Report saved:", args.audit_all)
+        return 1 if report["failed_pairs"] else 0
 
     if args.split:
         if args.inventory or args.overlay:

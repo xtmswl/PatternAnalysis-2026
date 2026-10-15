@@ -196,14 +196,55 @@ sorted before a seeded shuffle. All scans and derived slices for one prefix
 stay together; both models must reuse the saved manifest. Do not choose a
 new seed after observing test scores. The command refuses to overwrite an
 existing file and records a hash of the case/patient inventory identities.
-It reports actual scan counts per split; these counts are not known locally
-yet. Confirm the filename-derived identity rule before relying on this split
+The real command completed on 15 October, seed 42, with patient_overlap=False:
+
+| Split | Candidate patients | Scans |
+| --- | --- | --- |
+| Training | 26 | 136 |
+| Validation | 6 | 48 |
+| Test | 6 | 27 |
+| Total | 38 | 211 |
+
+The manifest runs/split_seed42.json was downloaded privately and inspected
+locally: 38 unique disjoint patient groups, 211 unique cases, consistent
+patient/case/file names and a matching recomputed identity hash. This checks
+manifest consistency, not biological identity or all file contents. Confirm the filename-derived identity rule before relying on this split
 for final unseen-patient claims. This command does not train a model.
 
 Synthetic checks passed for 38 groups with two scans each: 26/6/6 allocation,
 complete/disjoint grouping, reproducibility under reordered inventory,
-invalid-count/invalid-inventory rejection and refusing overwrite. Real split
-creation and remote verification remain pending.
+invalid-count/invalid-inventory rejection and refusing overwrite. The real
+split was created successfully on the new CPU allocation 662383/vcpu-2; the
+student screenshot confirms the totals and no prefix-group overlap. The downloaded JSON was independently checked locally as described above.
+Full-volume content validation remains pending.
+
+## Full data-integrity audit
+
+After filename inventory and split preparation, run on a CPU compute node:
+
+```bash
+python dataset.py --audit-all runs/audit_all.json
+```
+
+This reloads the full inventory and sequentially reads every MRI and mask.
+It checks readable volumes, 3D shape, image/mask shape and affine agreement,
+finite positive matching voxel spacing, finite MRI intensities, and finite
+nonnegative integer mask codes restricted to the publisher's 0–5 mapping.
+Per-code mask counts are included in the report. These checks do not prove
+expert annotations are correct or replace visual inspection. No fitted
+normalization, model selection, resampling or source-file edits occur.
+
+Progress and JSON checkpoints are saved every ten cases and on failures.
+The report records expected/checked/passed/failed counts, complete status,
+per-case observations and the case/patient identity hash. Failures are kept
+for inspection; no case is automatically dropped and the split is unchanged.
+A report with complete=false is partial even if failures=0. A completed
+report with any failures yields a nonzero exit status.
+
+Local synthetic checks passed for a valid pair, nonfinite MRI values,
+shifted mask affine, unknown class code and an unreadable scan, including
+continued reporting, CLI exit status and unchanged source-file hashes.
+Real 211-pair execution remains pending.
 
 ## Planned training and comparison
 
@@ -251,10 +292,11 @@ prostate Dice checkpoint and use test patients only after choices are fixed.
 | predict.py | Load saved weights, volume/slice inference and error visualisations |
 
 dataset.py currently implements filename-pair inventory, candidate patient
-indexing, grouped split preparation, one-pair metadata/label auditing and a
-publisher-labelled visual preview.
+indexing, grouped splitting, one-pair and full data-integrity auditing, and
+a publisher-labelled visual preview. Full-audit code is locally checked;
+its real 211-pair run remains pending.
 The real filename inventory has passed. Identity mapping, full-volume
-content checks, real split creation/verification, preprocessing and the training Dataset remain
+content checks, preprocessing and the training Dataset remain
 pending, as do modules.py, train.py and predict.py. Initial remote imports are verified:
 PyTorch 2.14.0+cu130 and nibabel 5.4.2 on the CPU allocation. Full dependency
 versions and runnable training commands remain to be recorded. CUDA execution
@@ -297,8 +339,12 @@ file trees, including duplicates and missing pairs. The student subsequently
 ran the real inventory on Rangpur: 211 pairs, 38 candidate patient IDs and
 zero reported issues. The student has not independently explained or
 implemented that logic yet. Codex added seeded patient-group splitting and
-checked its correctness and overwrite protection locally; it has not yet
-been run on the real data. No model has been built or trained. Future
+checked its correctness and overwrite protection locally. The student
+subsequently generated the real split on Rangpur: train26/136 scans,
+validation6/48, test6/27, with no prefix-group overlap. The downloaded manifest was independently inspected locally; groups/cases
+and the saved identity hash are internally consistent. Codex added full-volume integrity auditing and checked it on synthetic valid
+and damaged data locally; no real full-audit result is claimed yet.
+No model has been built or trained. Future
 entries will name actual assistance and verification, without claiming it in advance.
 
 ## Data acknowledgement
