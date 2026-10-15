@@ -30,7 +30,9 @@ No project models, training results or allocated-GPU measurements exist.
 The real filename inventory reports 211 MRI files, 211 mask files,
 211 paired scans, 38 candidate patient IDs and zero naming/pairing issues.
 The publisher label mapping is now verified. Filename-derived patient
-identity interpretation and full-volume content checks remain to be verified. The compulsory midpoint check-off is still pending.
+identity interpretation remains an explicit filename-based assumption.
+The full content audit completed remotely:211checked,211passed,0failed;
+independent inspection of its downloaded report remains pending. The compulsory midpoint check-off is still pending.
 
 ## Research question
 
@@ -149,7 +151,8 @@ retrieved 15 October 2026, specifies:
 The same document describes Week0 as pretreatment and Weeks1–7 as weekly
 scans during radiotherapy. The updated audit also rejects codes outside 0–5.
 The source mapping and original preview are consistent; full-dataset label
-validation remains pending. A shared-directory documentation search found
+validation subsequently completed as part of the full211pair audit.
+A shared-directory documentation search found
 only the use agreement; the label description was retrieved from CSIRO's
 public supporting-file API rather than inferred from anatomy or label order.
 
@@ -216,7 +219,8 @@ complete/disjoint grouping, reproducibility under reordered inventory,
 invalid-count/invalid-inventory rejection and refusing overwrite. The real
 split was created successfully on the new CPU allocation 662383/vcpu-2; the
 student screenshot confirms the totals and no prefix-group overlap. The downloaded JSON was independently checked locally as described above.
-Full-volume content validation remains pending.
+The subsequent full-volume integrity audit completed with211passes and0failures;
+independent inspection of its saved per-case report is next.
 
 ## Full data-integrity audit
 
@@ -244,7 +248,11 @@ report with any failures yields a nonzero exit status.
 Local synthetic checks passed for a valid pair, nonfinite MRI values,
 shifted mask affine, unknown class code and an unreadable scan, including
 continued reporting, CLI exit status and unchanged source-file hashes.
-Real 211-pair execution remains pending.
+The student ran the real audit on CPU job662383/vcpu-2. The screenshot
+confirms Audit complete=True,checked_pairs=211,passed_pairs=211,failed_pairs=0
+and the saved runs/audit_all.json. The report has not yet been downloaded
+and inspected locally for per-case size/spacing/class summaries. No failed
+case was removed; source data and the existing split remain unchanged.
 
 ## Planned training and comparison
 
@@ -294,15 +302,44 @@ prostate Dice checkpoint and use test patients only after choices are fixed.
 dataset.py currently implements filename-pair inventory, candidate patient
 indexing, grouped splitting, one-pair and full data-integrity auditing, and
 a publisher-labelled visual preview. Full-audit code is locally checked;
-its real 211-pair run remains pending.
-The real filename inventory has passed. Identity mapping, full-volume
-content checks, preprocessing and the training Dataset remain
+its real211pair run completed successfully. Per-case report inspection
+and preprocessing choices are next.
+The real filename inventory and full content audit have passed. Biological
+identity grouping still uses documented filename prefixes. Report inspection,
+preprocessing and the training Dataset remain
 pending, as do modules.py, train.py and predict.py. Initial remote imports are verified:
 PyTorch 2.14.0+cu130 and nibabel 5.4.2 on the CPU allocation. Full dependency
 versions and runnable training commands remain to be recorded. CUDA execution
 is not yet verified. Data, weights and private audit files stay out of Git.
 Existing folder name HipMRI_CAN_s4919055 is retained; it does not determine
 model dimensionality.
+
+## GPU diagnostic preparation
+
+cuda_check.py and cuda_check.slurm implement a synthetic CUDA check, separate
+from segmentation training. The batch directives follow the updated course
+[Ed #6](https://edstem.org/au/courses/38242/discussion/3476306) and
+[Ed #75](https://edstem.org/au/courses/38242/discussion/3537106) configuration:
+partition/account comp3710, one GPU and a five-minute limit, without the
+older guide's explicit memory request.
+
+After uploading both files, submit from the remote project directory on the
+login node:
+
+```bash
+mkdir -p runs
+sbatch cuda_check.slurm
+squeue --me
+```
+
+The script reuses the existing torch environment. Logs are written under
+runs/cuda_check_JOBID.out and .err, where Slurm substitutes the job number.
+It prints CUDA/device information, then checks a synthetic16-cubed Conv3d
+forward pass and finite parameter gradients after backward. It reads no MRI,
+updates no model weights and does not estimate CAN3D accuracy or full-model
+memory requirements. Require CUDA_CHECK_PASSED in the actual job output.
+Local script/shell syntax and rejection of missing Slurm allocation or CUDA
+were checked. No real GPU job has been submitted or passed yet.
 
 ## Feasibility review and check-off
 
@@ -343,7 +380,10 @@ checked its correctness and overwrite protection locally. The student
 subsequently generated the real split on Rangpur: train26/136 scans,
 validation6/48, test6/27, with no prefix-group overlap. The downloaded manifest was independently inspected locally; groups/cases
 and the saved identity hash are internally consistent. Codex added full-volume integrity auditing and checked it on synthetic valid
-and damaged data locally; no real full-audit result is claimed yet.
+and damaged data locally. The student then ran the real211pair audit on
+Rangpur, reporting211passes and0failures. Codex prepared a source-grounded
+Slurm GPU diagnostic and checked local syntax/negative paths; actual GPU
+execution remains pending.
 No model has been built or trained. Future
 entries will name actual assistance and verification, without claiming it in advance.
 
