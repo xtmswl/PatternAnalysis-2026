@@ -32,7 +32,8 @@ The real filename inventory reports 211 MRI files, 211 mask files,
 The publisher label mapping is now verified. Filename-derived patient
 identity interpretation remains an explicit filename-based assumption.
 The full content audit completed remotely:211checked,211passed,0failed;
-independent inspection of its downloaded report remains pending. The compulsory midpoint check-off is still pending.
+its downloaded report has been independently inspected and matches the
+saved split case list and identity hash. The compulsory midpoint check-off is still pending.
 
 ## Research question
 
@@ -220,7 +221,7 @@ invalid-count/invalid-inventory rejection and refusing overwrite. The real
 split was created successfully on the new CPU allocation 662383/vcpu-2; the
 student screenshot confirms the totals and no prefix-group overlap. The downloaded JSON was independently checked locally as described above.
 The subsequent full-volume integrity audit completed with211passes and0failures;
-independent inspection of its saved per-case report is next.
+its per-case report has been independently inspected locally.
 
 ## Full data-integrity audit
 
@@ -250,9 +251,26 @@ shifted mask affine, unknown class code and an unreadable scan, including
 continued reporting, CLI exit status and unchanged source-file hashes.
 The student ran the real audit on CPU job662383/vcpu-2. The screenshot
 confirms Audit complete=True,checked_pairs=211,passed_pairs=211,failed_pairs=0
-and the saved runs/audit_all.json. The report has not yet been downloaded
-and inspected locally for per-case size/spacing/class summaries. No failed
+and the saved runs/audit_all.json. The downloaded report was independently
+checked locally: all 211 case records pass their eight checks, coverage equals
+the split case set and the identity hash matches. No failed
 case was removed; source data and the existing split remain unchanged.
+
+### Observed dimensions and class coverage
+
+Of the 211 volumes, 210 are 256 x 256 x 128; training case K019_Week1 is
+256 x 256 x 144.
+All are stored int32 with LPS orientation, and all masks contain codes 0–5.
+Image/mask spacing agrees within every pair, but differs between patients.
+Training in-plane spacing ranges from 1.40625 to 1.875 mm, with through-plane
+spacing approximately 1.56 mm. Preprocessing must accommodate the depth variation and
+preserve image/mask alignment; the longer case is retained.
+
+Training-only voxel counts show prostate code 5 occupies approximately 0.104%
+of training voxels. This motivates per-class overlap assessment and the
+planned lecture-based soft Dice pilot; no model result is claimed. We do not
+fit normalization or alter the split from test-case contents. Final input
+grid and preprocessing remain to be defined and tested.
 
 ## Planned training and comparison
 
@@ -302,11 +320,11 @@ prostate Dice checkpoint and use test patients only after choices are fixed.
 dataset.py currently implements filename-pair inventory, candidate patient
 indexing, grouped splitting, one-pair and full data-integrity auditing, and
 a publisher-labelled visual preview. Full-audit code is locally checked;
-its real211pair run completed successfully. Per-case report inspection
-and preprocessing choices are next.
+its real 211-pair run completed successfully and its report was inspected
+locally. Preprocessing choices are next.
 The real filename inventory and full content audit have passed. Biological
-identity grouping still uses documented filename prefixes. Report inspection,
-preprocessing and the training Dataset remain
+identity grouping still uses documented filename prefixes. Preprocessing
+and the training Dataset remain
 pending, as do modules.py, train.py and predict.py. Initial remote imports are verified:
 PyTorch 2.14.0+cu130 and nibabel 5.4.2 on the CPU allocation. Full dependency
 versions and runnable training commands remain to be recorded. CUDA execution
