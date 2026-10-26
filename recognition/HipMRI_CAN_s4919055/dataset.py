@@ -1,10 +1,12 @@
-"""HipMRI inventory, grouped splitting, data audits and visual previews.
+"""HipMRI audits, patient splits and aligned 3D training data.
 
 Run this saved file on a Rangpur compute node, for example:
     python dataset.py --case B006_Week0
 
 Patient IDs below are inferred from filenames and still require confirmation.
-The training Dataset will follow content audit and preprocessing decisions.
+Preprocessing follows the task sheet Appendix B: per-volume z-score and
+categorical masks. Interpolation is implemented with PyTorch, using the
+same voxel-centre grid for images and labels; see the README for trade-offs.
 """
 
 import argparse
@@ -16,6 +18,9 @@ from pathlib import Path
 
 import nibabel as nib
 import numpy as np
+import torch
+import torch.nn.functional as F
+from torch.utils.data import Dataset
 
 
 DEFAULT_DATA_ROOT = Path("/home/groups/comp3710/HipMRI_Study_open")
@@ -25,6 +30,162 @@ LABEL_NAMES = {
     0: "Background", 1: "Body", 2: "Bones", 3: "Bladder",
     4: "Rectum", 5: "Prostate",
 }
+PILOT_SHAPE_DHW = (64, 128, 128)
+
+
+def read_patient_manifest(manifest_path):
+    """Validate the saved split, including all groups, before selecting one.
+
+    This reads filenames/identities only. It never opens held-out images to
+    compute training statistics, and never generates a replacement split.
+    """
+    manifest = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+    groups = manifest["splits"]
+    if set(groups) != {"train", "validation", "test"}:
+        raise ValueError("Manifest must contain train, validation and test.")
+    patients_seen, cases_seen, identities = set(), set(), []
+    for name, group in groups.items():
+        patients, scans = group["patient_ids"], group["scans"]
+        if not patients or not scans or len(patients) != len(set(patients)):
+            raise ValueError(f"Empty or duplicate patient group in {name}.")
+        if patients_seen.intersection(patients):
+            raise ValueError("Patient leakage between manifest splits.")
+        patients_seen.update(patients)
+        if {scan["patient_id"] for scan in scans} != set(patients):
+            raise ValueError(f"Patient list and scan membership differ in {name}.")
+        for scan in scans:
+            case, patient = scan["case_id"], scan["patient_id"]
+            match = re.fullmatch(r"([A-Za-z]+\d+)_Week(\d+)", case)
+            if (match is None or match.group(1) != patient
+                    or int(match.group(2)) != scan["week"]):
+                raise ValueError(f"Inconsistent case/patient/week: {case}.")
+            if case in cases_seen:
+                raise ValueError(f"Duplicate case in manifest: {case}.")
+            cases_seen.add(case)
+            for role, suffix in (("image", "LFOV"), ("mask", "SEMANTIC")):
+                if Path(scan[f"{role}_path"]).name not in (
+                    f"{case}_{suffix}.nii", f"{case}_{suffix}.nii.gz"
+                ):
+                    raise ValueError(f"Incorrect {role} filename for {case}.")
+            identities.append((case, patient))
+    digest = hashlib.sha256(json.dumps(sorted(identities)).encode("utf-8")).hexdigest()
+    if digest != manifest["inventory_identity_sha256"]:
+        raise ValueError("Manifest identity hash does not match its contents.")
+    if manifest["patient_overlap"] is not False:
+        raise ValueError("Manifest records patient overlap.")
+    return manifest
+
+
+def load_preprocessed_pair(pair, target_shape=PILOT_SHAPE_DHW):
+    """Load one complete case, reorient to RAS and resize without cropping.
+
+    NIfTI arrays are X,Y,Z; PyTorch spatial tensors are Z,Y,X (D,H,W).
+    Each MRI uses its own mean/std, as in Appendix B, without using a mask
+    or pooled validation/test statistics. Constant images normalize to zero.
+    Trilinear images (align_corners=False) and nearest-exact masks share
+    the same voxel-centre sampling grid. Fixed shape is not fixed mm spacing.
+    """
+    target_shape = tuple(target_shape)
+    if (len(target_shape) != 3
+            or any(not isinstance(v, int) or isinstance(v, bool) or v < 1 for v in target_shape)):
+        raise ValueError("target_shape must contain three positive integers (D,H,W).")
+    image_original = nib.load(pair["image_path"])
+    mask_original = nib.load(pair["mask_path"])
+    if (len(image_original.shape) != 3 or image_original.shape != mask_original.shape
+            or not np.allclose(image_original.affine, mask_original.affine, rtol=0, atol=1e-4)):
+        raise ValueError(f"Image/mask grids differ: {pair['case_id']}.")
+    for volume in (image_original, mask_original):
+        spacing = np.asarray(volume.header.get_zooms())
+        if not np.all(np.isfinite(volume.affine)) or not np.all(np.isfinite(spacing) & (spacing > 0)):
+            raise ValueError("Invalid spatial metadata.")
+    image_nii = nib.as_closest_canonical(image_original)
+    mask_nii = nib.as_closest_canonical(mask_original)
+    if not np.allclose(image_nii.affine, mask_nii.affine, rtol=0, atol=1e-4):
+        raise ValueError("Canonical image/mask grids differ.")
+    pixels = image_nii.get_fdata(dtype=np.float32)
+    labels = np.asanyarray(mask_nii.dataobj)
+    if not np.all(np.isfinite(pixels)):
+        raise ValueError("MRI contains nonfinite intensities.")
+    if not np.all(np.isin(labels, list(LABEL_NAMES))):
+        raise ValueError("Mask must contain integer codes 0 through 5.")
+    image = torch.from_numpy(np.ascontiguousarray(pixels.transpose(2, 1, 0))).float()
+    mask = torch.from_numpy(np.ascontiguousarray(labels.transpose(2, 1, 0))).long()
+    mean, std = image.mean(), image.std(correction=0)
+    image = (image - mean) / std.clamp_min(1e-8)
+    image = F.interpolate(image[None, None], size=target_shape,
+                          mode="trilinear", align_corners=False)[0]
+    mask = F.interpolate(mask[None, None].float(), size=target_shape,
+                         mode="nearest-exact")[0, 0].long()
+    target = F.one_hot(mask, num_classes=len(LABEL_NAMES)).permute(3, 0, 1, 2).float()
+
+    # New XYZ voxel centre j maps to old (j + .5) * scale - .5.
+    scale_xyz = np.asarray(image_nii.shape) / np.asarray(target_shape[::-1])
+    mapping = np.eye(4)
+    mapping[:3, :3] = np.diag(scale_xyz)
+    mapping[:3, 3] = (scale_xyz - 1) / 2
+    output_affine = image_nii.affine @ mapping
+    return {
+        "case_id": pair["case_id"], "patient_id": pair["patient_id"],
+        "image": image.contiguous(), "mask": mask.contiguous(),
+        "target": target.contiguous(),
+        "affine_xyz": torch.tensor(output_affine, dtype=torch.float64),
+        "original_affine_xyz": torch.tensor(image_original.affine, dtype=torch.float64),
+        "original_shape_xyz": torch.tensor(image_original.shape),
+        "normalization_mean": mean, "normalization_std": std,
+    }
+
+
+class HipMRIVolumeDataset(Dataset):
+    """One complete 3D image/target per item, shared by both model routes.
+
+    data_root relocates the manifest's exact basenames, without changing its
+    patient assignments. Only the requested split's image files are opened.
+    A training-only paired left/right flip is optional and off for the pilot.
+    No slice from a held-out patient is used for fitting or augmentation.
+    """
+
+    def __init__(self, manifest_path, split="train", data_root=DEFAULT_DATA_ROOT,
+                 target_shape=PILOT_SHAPE_DHW, flip_probability=0.0):
+        manifest = read_patient_manifest(manifest_path)
+        if split not in manifest["splits"]:
+            raise ValueError(f"Unknown split: {split}.")
+        if not 0 <= flip_probability <= 1 or (split != "train" and flip_probability != 0):
+            raise ValueError("Paired augmentation is allowed only in training (probability 0..1).")
+        self.pairs = []
+        for scan in manifest["splits"][split]["scans"]:
+            pair = dict(scan)
+            for role, folder in (("image", "semantic_MRs"), ("mask", "semantic_labels_only")):
+                pair[f"{role}_path"] = str(Path(data_root) / folder / Path(scan[f"{role}_path"]).name)
+            self.pairs.append(pair)
+        self.target_shape = tuple(target_shape)
+        self.flip_probability = flip_probability
+
+    def __len__(self):
+        return len(self.pairs)
+
+    def __getitem__(self, index):
+        sample = load_preprocessed_pair(self.pairs[index], self.target_shape)
+        if self.flip_probability and torch.rand(()).item() < self.flip_probability:
+            for key in ("image", "mask", "target"):
+                sample[key] = sample[key].flip(-1)
+            # W is the X axis of the canonical RAS volume.
+            reflection = torch.eye(4, dtype=torch.float64)
+            reflection[0, 0] = -1
+            reflection[0, 3] = self.target_shape[2] - 1
+            sample["affine_xyz"] = sample["affine_xyz"] @ reflection
+        return sample
+
+
+def volume_to_slices(image, target):
+    """Unbatched 1xDxHxW / KxDxHxW -> Dx1xHxW / DxKxHxW.
+
+    This is a view of the same preprocessed case, not a new random slice split.
+    Reassembly is the inverse permutation; keep slice order during evaluation.
+    """
+    if (image.ndim != 4 or target.ndim != 4 or image.shape[0] != 1
+            or image.shape[1:] != target.shape[1:]):
+        raise ValueError("Expected aligned unbatched 3D image and target tensors.")
+    return image.permute(1, 0, 2, 3).contiguous(), target.permute(1, 0, 2, 3).contiguous()
 
 
 def build_inventory(data_root):
@@ -280,6 +441,58 @@ def audit_all_pairs(inventory, output_path):
     return report
 
 
+def check_training_loader(manifest_path, data_root, target_shape, samples, output_path):
+    """Exercise training cases only; save checks, not training results.
+
+    The first case plus the longest training case are included when possible,
+    so the depth-144 scan is not silently missed. Only header shapes are read
+    for choosing the longest case; no validation/test scan is loaded.
+    """
+    if samples < 1:
+        raise ValueError("samples must be positive.")
+    dataset = HipMRIVolumeDataset(manifest_path, "train", data_root, target_shape)
+    longest = max(range(len(dataset)), key=lambda i: nib.load(dataset.pairs[i]["image_path"]).shape[2])
+    selected = list(dict.fromkeys([0, longest] + list(range(len(dataset)))))[:samples]
+    report = {"split": "train", "shape_dhw": list(target_shape), "cases": [],
+              "complete": False, "is_training_result": False}
+    for index in selected:
+        sample = dataset[index]
+        image, mask, target = sample["image"], sample["mask"], sample["target"]
+        slices, slice_targets = volume_to_slices(image, target)
+        checks = {
+            "expected_image_shape": tuple(image.shape) == (1, *target_shape),
+            "expected_target_shape": tuple(target.shape) == (6, *target_shape),
+            "finite_image": bool(torch.isfinite(image).all()),
+            "one_hot": bool(torch.all(target.sum(dim=0) == 1)),
+            "encoding_matches_mask": bool(torch.equal(target.argmax(dim=0), mask)),
+            "slice_image_roundtrip": bool(torch.equal(slices.permute(1, 0, 2, 3), image)),
+            "slice_target_roundtrip": bool(torch.equal(slice_targets.permute(1, 0, 2, 3), target)),
+            "all_six_labels_retained": set(mask.unique().tolist()) == set(LABEL_NAMES),
+        }
+        counts = torch.bincount(mask.flatten(), minlength=6).tolist()
+        observation = {
+            "case_id": sample["case_id"],
+            "original_shape_xyz": sample["original_shape_xyz"].tolist(),
+            "image_shape": list(image.shape), "target_shape": list(target.shape),
+            "affine_xyz": sample["affine_xyz"].tolist(),
+            "label_voxel_counts": counts,
+            "normalization_mean": sample["normalization_mean"].item(),
+            "normalization_std": sample["normalization_std"].item(),
+            "checks": checks, "passed": all(checks.values()),
+        }
+        report["cases"].append(observation)
+        print(f"{sample['case_id']}: image={tuple(image.shape)}, target={tuple(target.shape)}, "
+              f"labels={mask.unique().tolist()}, passed={observation['passed']}", flush=True)
+    report["complete"] = True
+    report["passed"] = all(case["passed"] for case in report["cases"])
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(report, indent=2, allow_nan=False) + "\n", encoding="utf-8")
+    print("Report saved:", output_path)
+    print("LOADER_CHECK_PASSED" if report["passed"] else "LOADER_CHECK_FAILED")
+    return report
+
+
 def main():
     parser = argparse.ArgumentParser(description="Inventory or audit HipMRI data.")
     parser.add_argument("--data-root", type=Path, default=DEFAULT_DATA_ROOT)
@@ -288,10 +501,22 @@ def main():
     parser.add_argument("--inventory", type=Path, help="Save a full filename-pair inventory JSON.")
     parser.add_argument("--split", type=Path, help="Create a new patient-split JSON; refuses overwrite.")
     parser.add_argument("--audit-all", type=Path, help="Read all pairs and save an integrity report JSON.")
+    parser.add_argument("--loader-check", type=Path, help="Check prepared training tensors; save JSON.")
+    parser.add_argument("--manifest", type=Path, default=Path("runs/split_seed42.json"))
+    parser.add_argument("--shape", type=int, nargs=3, default=PILOT_SHAPE_DHW, metavar=("D", "H", "W"))
+    parser.add_argument("--samples", type=int, default=3)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--val-patients", type=int, default=6)
     parser.add_argument("--test-patients", type=int, default=6)
     args = parser.parse_args()
+
+    if args.loader_check:
+        if args.split or args.inventory or args.overlay or args.audit_all:
+            parser.error("Use --loader-check separately from other output modes.")
+        torch.set_num_threads(1)
+        report = check_training_loader(args.manifest, args.data_root, tuple(args.shape),
+                                       args.samples, args.loader_check)
+        return 0 if report["passed"] else 1
 
     if args.audit_all:
         if args.split or args.inventory or args.overlay:
