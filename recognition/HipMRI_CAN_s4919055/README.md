@@ -26,9 +26,9 @@ vcpu-2. The student screenshot confirms all four checks passed: both_3d,
 same_shape, same_affine and finite_nonnegative_integer_labels. Local
 synthetic checks also cover shape/affine mismatches and fractional labels.
 
-The 2D U-Net baseline and soft Dice loss now have local synthetic forward/
-backward checks. CAN3D and the training/prediction drivers remain unimplemented;
-there are no trained checkpoints, test scores or full-model GPU measurements.
+The 2D U-Net baseline, soft Dice loss and baseline training/prediction drivers
+have local synthetic checks. CAN3D remains unimplemented. There are no
+real-data trained checkpoints, test scores or full-model GPU measurements.
 On 26 October the student supplied the output of Slurm job 696947 on a100-8:
 CUDA available=True, NVIDIA A100-PCIE-40GB, CUDA_CHECK_PASSED. This establishes
 the tiny diagnostic's GPU execution, not segmentation accuracy or CAN3D memory.
@@ -38,8 +38,8 @@ The publisher label mapping is now verified. Filename-derived patient
 identity interpretation remains an explicit filename-based assumption.
 The full content audit completed remotely:211checked,211passed,0failed;
 its downloaded report has been independently inspected and matches the
-saved split case list and identity hash. Completion of the compulsory midpoint
-check-off has not been confirmed since the student's 15 October report.
+saved split case list and identity hash. The student plans to complete the
+compulsory check-off on 27 October; completion has not yet been recorded.
 
 ## Research question
 
@@ -80,7 +80,7 @@ downsampling and output-resolution recovery against the paper/lecture.
   masks; both directories are confirmed by the student screenshot. Individual
   sample filenames are now confirmed. Match files by patient/week prefix,
   not directory-listing order. The full filename inventory and original-volume
-  content audits passed. The new downsampling loader still needs a real-data pilot.
+  content audits passed. A three-training-case downsampling loader pilot also passed.
 - Original collection: [CSIRO male pelvis MRI](https://doi.org/10.25919/45t8-p065).
   The course sheet describes 38 patients and 211 3D scans. The real Rangpur
   filename inventory now confirms 211 paired scans and 38 candidate IDs. Repeated scans from one patient must
@@ -339,7 +339,13 @@ label bands, world-coordinate mapping, variable depth, constant images,
 absent classes, invalid labels/nonfinite MRI, affine mismatch, unchanged
 source hashes, manifest tampering/leakage, training-only file access,
 paired flip and DataLoader collation. The existing real 211-case manifest
-passes the new identity validation. Real image preprocessing is still pending.
+passes the new identity validation. The student subsequently supplied the
+real output of CPU job 699944: B006_Week0, K019_Week1 and B006_Week1 each
+passed, with image 1x64x128x128, target 6x64x128x128 and all codes 0-5
+retained. LOADER_CHECK_PASSED was printed and the displayed .err was empty.
+The detailed JSON report has not yet been downloaded for independent count
+inspection. This three-case pilot is not a full preprocessing audit or an
+accuracy test; base/apex boundary quality still needs visual evaluation.
 
 ## Initial 2D U-Net baseline
 
@@ -356,20 +362,122 @@ The model returns logits. SoftDiceLoss applies softmax once, computes
 class over batch/spatial axes, and returns one minus the equally weighted
 class mean. Background is included by default. Finite smoothing handles
 empty classes; this training loss is not a substitute for per-case hard
-Dice/IoU evaluation. Adam and the explicit lecture training loop remain
-planned in train.py. The CAN3D paper's specialised DSF loss is not used here.
+Dice/IoU evaluation. Adam and the explicit lecture training loop are now
+implemented in train.py. The CAN3D paper's specialised DSF loss is not used here.
 
 ```bash
-python -m unittest -v test_dataset test_modules
+python -m unittest -v test_dataset test_modules test_experiment
 ```
 
-All 13 local synthetic tests passed on 26 October. U-Net preserves expected
+All 17 local synthetic tests passed on 26 October. U-Net preserves expected
 shape and produces finite nonzero head gradients; Dice is checked against
 a hand-calculated uniform case and near-perfect/disjoint predictions.
 These are implementation checks, not trained segmentation results.
 Local validation: Python 3.12.14, PyTorch 2.14.0, nibabel 5.4.2, NumPy 2.5.3.
 Remote CUDA diagnostic: PyTorch 2.14.0+cu130, CUDA package 13.0, A100 40GB.
 Record complete remote dependency versions with the eventual training run.
+
+## Baseline training, checkpoints and prediction
+
+train.py now supports three explicitly separated modes. This driver currently
+supports **UNet2D only**; CAN3D still requires its own verified architecture
+and volumetric training route. No real-data model has been trained yet.
+
+1. **debug** fits up to three prostate-bearing slices and one empty-prostate
+   slice from the first training case. Labels select these slices only for
+   training-only debugging, not final training or evaluation. It runs Adam,
+   checks finite loss/gradients, verifies parameter changes, saves debug.pt,
+   reloads it and compares outputs. BASELINE_DEBUG_PASSED requires decreased
+   selected-training loss and successful weight reload; it does not require
+   a clinical/test Dice target and is not evidence of generalization.
+2. **fit** uses every slice from every training case. Cases and slices are
+   shuffled using seed+epoch. Each epoch evaluates complete validation
+   volumes with eval/no_grad. best.pt is selected by validation patient-macro
+   prostate Dice; last.pt includes Adam state and epoch/history for resuming.
+   There is no test-image access. Fixed learning rate 1e-3, base width 16,
+   slice batch size 8 and 30 epochs are initial configurable choices.
+3. **test** loads an already fixed fit checkpoint and evaluates every held-out
+   test volume, only with explicit --final-test. A debug checkpoint is refused.
+   Do not change the split, grid or settings in response to final test scores.
+
+Run the short, training-only GPU check first. The saved Slurm script follows
+Ed #75 (partition/account comp3710, one GPU) and uses a ten-minute time limit:
+
+```bash
+mkdir -p runs
+sbatch baseline_debug.slurm
+```
+
+For job JOBID, it writes runs/baseline_debug_JOBID/{config.json,history.json,
+debug_report.json,debug.pt,curves.png}. The script then runs predict.py on
+that same training case in a new process and writes previews under
+runs/baseline_preview_JOBID. Require BASELINE_DEBUG_PASSED and
+PREDICTION_PREVIEW_SAVED in its .out; inspect .err as well. The real A100
+run of this new script is still pending. Submit once, then query with squeue.
+
+After debugging succeeds, a full baseline fit can be launched **inside an
+appropriate compute allocation**, for example:
+
+```bash
+python train.py --mode fit --device cuda --epochs 30 --output runs/baseline_fit_seed42
+```
+
+If an allocation ends after a saved epoch, resume into a new directory:
+
+```bash
+python train.py --mode fit --device cuda --epochs 30 --resume runs/baseline_fit_seed42/last.pt --output runs/baseline_fit_resume
+```
+
+Keep best.pt beside last.pt when resuming. The previous best is retained
+even if later epochs do not improve it. Resume rejects changes to model,
+shape, saved manifest bytes, seed, learning rate and batch size. Bitwise
+reproducibility across different hardware/library versions is not assumed.
+No full fit or final test is automatically started by baseline_debug.slurm.
+
+For a validation preview, using a real fit checkpoint:
+
+```bash
+python predict.py --checkpoint runs/baseline_fit_seed42/best.pt --split validation --output runs/baseline_validation_preview
+```
+
+predict.py reloads weights, processes every slice of each selected case,
+reassembles the volume and prints hard per-class overlap metrics. It saves
+a resized-RAS NIfTI mask, prostate truth/prediction/FP-red/FN-blue panels
+at first/largest/last prostate slices, and preview_metrics.json. A preview
+subset is explicitly labelled as such; it is not a full test benchmark.
+Debug checkpoints may only preview their original training case.
+
+For final full test evaluation **after settings are fixed**, use:
+
+```bash
+python train.py --mode test --final-test --checkpoint runs/baseline_fit_seed42/best.pt --output runs/baseline_final_test
+```
+
+Hard metrics use exact whole-volume voxel counts for each of the six classes.
+If truth and prediction are both empty, that class is None and excluded from
+its mean; if only one is empty its overlap is zero. Reports include both
+scan-macro means and patient-macro means (mean scans within a patient, then
+mean patients), so frequently scanned patients do not dominate the latter.
+Soft training/validation loss and hard Dice are labelled separately. Curves
+plot training/validation losses and validation patient-macro prostate Dice.
+
+Checkpoints bind to the exact manifest file hash and record model/preprocessing
+settings, source-file hashes, dependency versions, seed, host and job ID.
+New run directories refuse overwrite. Peak memory is PyTorch allocated
+memory, not total device/context memory; debug peak is captured before
+checkpoint reload. Prediction timing covers preprocessed CPU input through
+complete-case CPU hard mask, including transfers/reassembly, excluding disk,
+metrics and plotting. CUDA preview timing includes a warm-up batch. Treat
+initial validation/debug timings as descriptive; a controlled final benchmark
+against CAN3D on identical inputs/hardware remains pending.
+
+Synthetic integration tests actually fit a tiny temporary fixture, reload
+weights, export a spatially checked NIfTI, resume training, preserve the old
+best checkpoint, and exercise final-test gates. Held-out image files are
+deliberately absent during debug/fit tests, so accidental access fails.
+Known-count Dice/IoU, empty classes and unequal patient scan counts also have
+independent expected-answer checks. Synthetic plotting samples stay private
+and are not presented as real MRI results.
 
 ## Planned training and comparison
 
@@ -420,11 +528,12 @@ dataset.py currently implements filename-pair inventory, candidate patient
 indexing, grouped splitting, one-pair and full data-integrity auditing, and
 a publisher-labelled visual preview. Full-audit code is locally checked;
 its real 211-pair run completed successfully and its report was inspected
-locally. Preprocessing choices are next.
+locally. The real three-case preprocessing pilot also passed.
 The real filename inventory and full content audit have passed. Biological
 identity grouping still uses documented filename prefixes. Preprocessing,
-the training Dataset and baseline modules.py have synthetic checks; real
-loader checks, CAN3D, train.py and predict.py remain pending. Initial remote imports are verified:
+the training Dataset and baseline modules.py have synthetic checks; train.py
+and predict.py now support the tested baseline workflow. CAN3D and real-data
+baseline training remain pending. Initial remote imports are verified:
 PyTorch 2.14.0+cu130 and nibabel 5.4.2 on the CPU allocation. Full dependency
 versions and runnable training commands remain to be recorded. CUDA execution
 passed the tiny check described below. Data, weights and private audit files stay out of Git.
@@ -504,15 +613,17 @@ filename-derived patient groups; all 211 pairs passed the implemented data
 integrity checks. The saved split is 26/6/6 groups and 136/48/27 scans without
 prefix overlap. The publisher confirms codes 0-5. Slurm job 696947 passed a
 tiny Conv3d CUDA forward/backward check on a100-8 (A100 40 GB). Locally, the
-loader, baseline and loss passed 13 synthetic tests. No trained model, test
-Dice or full-model resource measurement exists. CAN3D and train/predict
-drivers remain to be implemented; the real loader pilot has not run yet.
+baseline workflow passed 17 synthetic tests. Real CPU job 699944 passed
+three training cases, including the depth-144 case, retaining all six codes.
+No real-data trained model, test Dice or full-model GPU measurement exists.
+The baseline train/predict drivers are ready; CAN3D remains to be implemented.
 
-**Budget, risks and next experiment.** First run the saved CPU loader job on
-three training scans, including the depth-144 case; inspect tensors and
-post-resize prostate counts. Then fit a small training-only baseline debug
-subset before full training. Initially cap each subsequent GPU pilot at two
-hours, batch size one; record actual use before expanding. Main risks are
+**Budget, risks and next experiment.** Inspect the saved loader JSON's
+post-resize counts, then run the ten-minute GPU debug job on a few slices
+from one training case, checking updates, weight reload and plots before
+full training. Initially cap each subsequent fit pilot at two
+hours, with one volume per 3D batch or eight slices per 2D batch; record
+actual use before expanding. Main risks are
 queue delays, small-organ loss from downsampling, imbalance and unverified
 patient identity beyond filenames. Compare preprocessing changes using
 training/validation only. Keep the working 2D baseline as fallback; any
@@ -556,8 +667,12 @@ Codex added manifest validation, aligned preprocessing, the PyTorch Dataset,
 slice conversion, training-only paired augmentation, a saved loader-check
 job, the initial 2D U-Net and lecture-based soft Dice loss. Codex checked
 13 synthetic data/model tests and revalidated the real saved manifest.
-The student has not independently explained or implemented these additions.
-No model has been trained. Future
+The student subsequently supplied the successful real three-case loader
+output for job 699944. Codex added the baseline Adam/debug/fit/test driver,
+checkpoint persistence/resume, metrics, reload/prediction and plots. The
+expanded 17-test suite includes actual synthetic training and safe held-out
+access tests. The student has not independently explained or implemented
+these additions. No model has been trained on real MRI yet. Future
 entries will name actual assistance and verification, without claiming it in advance.
 
 ## Data acknowledgement
