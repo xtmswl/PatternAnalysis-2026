@@ -465,18 +465,64 @@ or training-performance claim is inferred from this diagnostic.
 
 ## Feasibility review and check-off
 
-Check-off completion unconfirmed. Section 3 requires a one-page written review covering
-user/scope and 3-5 measurable criteria, course/model rationale, preliminary
-feasibility evidence, compute budget, risks and fallback. It is an ungraded
-3-5 minute practical consultation, with no live demo/slides/oral exam required
-for that consultation. Its technical write-up contributes to final documentation.
+The student plans to attend on **27 October 2026**; completion has not yet
+been recorded. The following is the written review draft, prepared 26 October.
+Its proposed thresholds and compute limits are project choices, not measured
+results or guarantees. The student needs to read and understand it before
+discussing it with the tutor.
 
-Confirm the actual date/make-up arrangements with staff now; a fully trained
-final model is not required for the review, but missing this compulsory hurdle
-can prevent passing the project. Prepare a real 3D data audit or allocated-GPU
-smoke test before presenting the review. Do not describe planned evidence as
-completed. If memory is excessive, first use justified aligned downsampling
-per the task table; any change of difficulty is an explicit scope decision.
+### Written feasibility review
+
+**User need and scope.** Build an educational contour-drafting prototype for
+an imaging specialist to review. Investigate whether Hard CAN3D improves
+prostate boundaries and continuity over a standard 2D U-Net enough to justify
+its computation. Use the course HipMRI dataset and predict all six labels;
+prostate is code 5. Automated clinical deployment is outside this prototype.
+
+**Proposed acceptance criteria.** (1) Zero overlap between filename-derived
+patient groups in train, validation and test. (2) Target held-out prostate
+Dice at least 0.70, while reporting every class's Dice/IoU and the exact
+aggregation. (3) Present 3-5 real failure cases, including base/apex or
+boundary leakage, with truth/prediction/false-positive/false-negative panels.
+(4) Run a batch-one 3D pilot within a proposed 35 GiB peak allocated-memory
+budget on one 40 GB A100. (5) Measure parameters, peak VRAM and seconds per
+complete case for both models under the same evaluation conditions, rather
+than assuming 3D is better. These criteria are not yet achieved model results.
+
+**Choice and course basis.** CAN3D uses compact 3D dilated context aggregation
+(Dai et al., 2021); the baseline follows U-Net (Ronneberger et al., 2015).
+Course concepts are convolution, dilation, encoder/decoder skips, one-hot
+masks, per-class Dice, validation, Adam and an explicit backpropagation loop.
+Use the same saved patient split and preprocessing for both models. Start
+with per-volume z-score and an aligned 64x128x128 full-volume pilot grid;
+trilinear MRI and nearest-exact labels. This fixes voxel counts, not physical
+spacing. The initial loss is lecture-based soft Dice, an explicit adaptation
+from the CAN3D paper's specialised DSF loss.
+
+**Evidence available.** The real inventory has 211 paired scans from 38
+filename-derived patient groups; all 211 pairs passed the implemented data
+integrity checks. The saved split is 26/6/6 groups and 136/48/27 scans without
+prefix overlap. The publisher confirms codes 0-5. Slurm job 696947 passed a
+tiny Conv3d CUDA forward/backward check on a100-8 (A100 40 GB). Locally, the
+loader, baseline and loss passed 13 synthetic tests. No trained model, test
+Dice or full-model resource measurement exists. CAN3D and train/predict
+drivers remain to be implemented; the real loader pilot has not run yet.
+
+**Budget, risks and next experiment.** First run the saved CPU loader job on
+three training scans, including the depth-144 case; inspect tensors and
+post-resize prostate counts. Then fit a small training-only baseline debug
+subset before full training. Initially cap each subsequent GPU pilot at two
+hours, batch size one; record actual use before expanding. Main risks are
+queue delays, small-organ loss from downsampling, imbalance and unverified
+patient identity beyond filenames. Compare preprocessing changes using
+training/validation only. Keep the working 2D baseline as fallback; any
+difficulty change needs an explicit scope decision. Final recommendation
+must follow measured accuracy, boundary failures and compute costs.
+
+**AI assistance.** Codex helped draft the code, tests and this review. The
+student ran real audits and supplied the GPU log; independent explanation of
+the new loader/model choices is still to be demonstrated. Detailed disclosure
+and references follow below.
 
 ## Artificial Intelligence Usage Disclosure
 
