@@ -26,14 +26,20 @@ vcpu-2. The student screenshot confirms all four checks passed: both_3d,
 same_shape, same_affine and finite_nonnegative_integer_labels. Local
 synthetic checks also cover shape/affine mismatches and fractional labels.
 
-No project models, training results or allocated-GPU measurements exist.
+The 2D U-Net baseline and soft Dice loss now have local synthetic forward/
+backward checks. CAN3D and the training/prediction drivers remain unimplemented;
+there are no trained checkpoints, test scores or full-model GPU measurements.
+On 26 October the student supplied the output of Slurm job 696947 on a100-8:
+CUDA available=True, NVIDIA A100-PCIE-40GB, CUDA_CHECK_PASSED. This establishes
+the tiny diagnostic's GPU execution, not segmentation accuracy or CAN3D memory.
 The real filename inventory reports 211 MRI files, 211 mask files,
 211 paired scans, 38 candidate patient IDs and zero naming/pairing issues.
 The publisher label mapping is now verified. Filename-derived patient
 identity interpretation remains an explicit filename-based assumption.
 The full content audit completed remotely:211checked,211passed,0failed;
 its downloaded report has been independently inspected and matches the
-saved split case list and identity hash. The compulsory midpoint check-off is still pending.
+saved split case list and identity hash. Completion of the compulsory midpoint
+check-off has not been confirmed since the student's 15 October report.
 
 ## Research question
 
@@ -44,9 +50,10 @@ held-out overlap scores and actual failure cases.
 
 ## Course and literature basis
 
-The latest visible Blackboard sheet was checked on 15 October:
-COMP3710_Report_2026_draft_v2.3.pdf. Its cover internally says Version 2.2
-Final Assessment Specification and still displays DRAFT in the title.
+The latest Ed attachment was checked on 26 October:
+[COMP3710_Report_2026_v2.5.pdf](https://edstem.org/au/courses/38242/discussion/3600790).
+Its cover says Version 2.5 Final Assessment Specification and still displays
+DRAFT in the title. Sections 2.2 and 3-6 retain the relevant HipMRI requirements.
 The model table on p. 6 lists CAN3D as Hard, reference [5], with downsampled
 HipMRI 3D data and a test Dice target of at least 0.7. The U-Net baseline is
 reference [1]. Appendix A, p. 17, specifies the data location. Sections 3-6
@@ -72,8 +79,8 @@ downsampling and output-resolution recovery against the paper/lecture.
 - Appendix A names semantic_MRs for 3D MRIs and semantic_labels_only for
   masks; both directories are confirmed by the student screenshot. Individual
   sample filenames are now confirmed. Match files by patient/week prefix,
-  not directory-listing order. The full filename inventory passed; scan
-  contents and any provided downsampled version still need audit.
+  not directory-listing order. The full filename inventory and original-volume
+  content audits passed. The new downsampling loader still needs a real-data pilot.
 - Original collection: [CSIRO male pelvis MRI](https://doi.org/10.25919/45t8-p065).
   The course sheet describes 38 patients and 211 3D scans. The real Rangpur
   filename inventory now confirms 211 paired scans and 38 candidate IDs. Repeated scans from one patient must
@@ -269,8 +276,100 @@ preserve image/mask alignment; the longer case is retained.
 Training-only voxel counts show prostate code 5 occupies approximately 0.104%
 of training voxels. This motivates per-class overlap assessment and the
 planned lecture-based soft Dice pilot; no model result is claimed. We do not
-fit normalization or alter the split from test-case contents. Final input
-grid and preprocessing remain to be defined and tested.
+fit normalization or alter the split from test-case contents. The pilot input
+grid and preprocessing are defined below; their real-data effect on small
+structures remains to be tested.
+
+## Aligned training Dataset and pilot grid
+
+HipMRIVolumeDataset reads the saved manifest, recomputes its identity hash,
+checks disjoint patient/case membership and verifies each recorded filename.
+It opens only the selected split's images. An optional data_root relocates
+the recorded basenames without changing patient assignments. Both model
+routes will use this Dataset rather than independently splitting slices.
+
+Preprocessing follows Appendix B's per-volume z-score idea. The full MRI is
+normalized by its own mean and population standard deviation, with a small
+denominator clamp for constant images. There is no mask-based normalization
+and no pooled validation/test statistic fitted to training. Reorientation
+uses the NIfTI affine to convert both arrays from their stored orientation
+to RAS. NIfTI XYZ is then transposed to PyTorch ZYX (depth, height, width).
+
+The initial **pilot**, not a tuned final setting, resizes the complete field
+of view to D,H,W = 64,128,128. This reduces voxel count by about eightfold
+for the usual scans and includes the longer depth-144 case without clipping.
+It is a fixed voxel-count grid, **not** a common physical-spacing grid.
+Per-case spacing still differs; effective output affines and original
+affines/shapes are returned. This trade-off may lose small boundary features
+and must be assessed on training/validation data before final evaluation.
+
+Images use trilinear interpolation with align_corners=False; labels use
+nearest-exact interpolation on the same voxel-centre grid, so no fractional
+anatomical codes are introduced. See [PyTorch interpolation documentation](https://docs.pytorch.org/docs/2.14/generated/torch.nn.functional.interpolate.html).
+Each item contains image 1xDxHxW, integer mask DxHxW and one-hot target
+6xDxHxW, with six fixed channels even if some labels are absent. The model
+receives only image; mask/target are the supervised answers. An optional
+paired left/right flip is restricted to training and disabled for this pilot.
+volume_to_slices produces Dx1xHxW and Dx6xHxW for the 2D baseline. Evaluation
+must preserve slice order and reassemble a whole volume before scoring.
+
+On a compute allocation, reuse the existing manifest:
+
+```bash
+python dataset.py --loader-check runs/loader_check.json --samples 3
+```
+
+Or submit the saved CPU job from login0 (mkdir runs before submission):
+
+```bash
+mkdir -p runs
+sbatch loader_check.slurm
+```
+
+This loads the first and longest training cases, plus another case if
+available, checks finite tensors, one-hot labels, slice reconstruction and
+retention of all six labels. Its JSON reports post-resize class counts.
+LOADER_CHECK_PASSED is required from the real run; a missing label is a
+failure to investigate, not permission to discard the case. The diagnostic
+does not train a model or prove boundary quality. It needs CPU resources,
+while subsequent model training uses the GPU.
+
+Local synthetic checks cover an analytic LPS coordinate ramp and known
+label bands, world-coordinate mapping, variable depth, constant images,
+absent classes, invalid labels/nonfinite MRI, affine mismatch, unchanged
+source hashes, manifest tampering/leakage, training-only file access,
+paired flip and DataLoader collation. The existing real 211-case manifest
+passes the new identity validation. Real image preprocessing is still pending.
+
+## Initial 2D U-Net baseline
+
+modules.py implements the standard encoder/decoder U-Net pattern with four
+max-pool stages, two padded 3x3/ReLU convolutions per stage, transposed
+convolution upsampling, concatenated skip features, and a 1x1 six-class head.
+The initial width is 16 (16,32,64,128,256), reduced from the original paper's
+64 for this pilot. Padding keeps output size equal to input rather than
+the paper's valid-convolution cropping. H,W must be multiples of 16.
+There are no pretrained weights or extra feature extractors.
+
+The model returns logits. SoftDiceLoss applies softmax once, computes
+(2*intersection+1e-6)/(predicted_mass+target_mass+1e-6) separately for each
+class over batch/spatial axes, and returns one minus the equally weighted
+class mean. Background is included by default. Finite smoothing handles
+empty classes; this training loss is not a substitute for per-case hard
+Dice/IoU evaluation. Adam and the explicit lecture training loop remain
+planned in train.py. The CAN3D paper's specialised DSF loss is not used here.
+
+```bash
+python -m unittest -v test_dataset test_modules
+```
+
+All 13 local synthetic tests passed on 26 October. U-Net preserves expected
+shape and produces finite nonzero head gradients; Dice is checked against
+a hand-calculated uniform case and near-perfect/disjoint predictions.
+These are implementation checks, not trained segmentation results.
+Local validation: Python 3.12.14, PyTorch 2.14.0, nibabel 5.4.2, NumPy 2.5.3.
+Remote CUDA diagnostic: PyTorch 2.14.0+cu130, CUDA package 13.0, A100 40GB.
+Record complete remote dependency versions with the eventual training run.
 
 ## Planned training and comparison
 
@@ -323,12 +422,12 @@ a publisher-labelled visual preview. Full-audit code is locally checked;
 its real 211-pair run completed successfully and its report was inspected
 locally. Preprocessing choices are next.
 The real filename inventory and full content audit have passed. Biological
-identity grouping still uses documented filename prefixes. Preprocessing
-and the training Dataset remain
-pending, as do modules.py, train.py and predict.py. Initial remote imports are verified:
+identity grouping still uses documented filename prefixes. Preprocessing,
+the training Dataset and baseline modules.py have synthetic checks; real
+loader checks, CAN3D, train.py and predict.py remain pending. Initial remote imports are verified:
 PyTorch 2.14.0+cu130 and nibabel 5.4.2 on the CPU allocation. Full dependency
 versions and runnable training commands remain to be recorded. CUDA execution
-is not yet verified. Data, weights and private audit files stay out of Git.
+passed the tiny check described below. Data, weights and private audit files stay out of Git.
 Existing folder name HipMRI_CAN_s4919055 is retained; it does not determine
 model dimensionality.
 
@@ -357,11 +456,16 @@ forward pass and finite parameter gradients after backward. It reads no MRI,
 updates no model weights and does not estimate CAN3D accuracy or full-model
 memory requirements. Require CUDA_CHECK_PASSED in the actual job output.
 Local script/shell syntax and rejection of missing Slurm allocation or CUDA
-were checked. No real GPU job has been submitted or passed yet.
+were checked. Real job 696947 passed on a100-8, as shown in the output
+supplied by the student on 26 October. It reported CUDA=True, A100-PCIE-40GB,
+output shape 1x2x16x16x16, finite backward gradients and CUDA_CHECK_PASSED.
+Reported peak allocation was 0.173828125 MiB for this tiny diagnostic only.
+The .err log and Slurm accounting were not supplied; no full-model resource
+or training-performance claim is inferred from this diagnostic.
 
 ## Feasibility review and check-off
 
-Check-off pending. Section 3 requires a one-page written review covering
+Check-off completion unconfirmed. Section 3 requires a one-page written review covering
 user/scope and 3-5 measurable criteria, course/model rationale, preliminary
 feasibility evidence, compute budget, risks and fallback. It is an ungraded
 3-5 minute practical consultation, with no live demo/slides/oral exam required
@@ -400,9 +504,14 @@ validation6/48, test6/27, with no prefix-group overlap. The downloaded manifest 
 and the saved identity hash are internally consistent. Codex added full-volume integrity auditing and checked it on synthetic valid
 and damaged data locally. The student then ran the real211pair audit on
 Rangpur, reporting211passes and0failures. Codex prepared a source-grounded
-Slurm GPU diagnostic and checked local syntax/negative paths; actual GPU
-execution remains pending.
-No model has been built or trained. Future
+Slurm GPU diagnostic and checked local syntax/negative paths; the student
+subsequently supplied its passing A100 output for job 696947. On 26 October
+Codex added manifest validation, aligned preprocessing, the PyTorch Dataset,
+slice conversion, training-only paired augmentation, a saved loader-check
+job, the initial 2D U-Net and lecture-based soft Dice loss. Codex checked
+13 synthetic data/model tests and revalidated the real saved manifest.
+The student has not independently explained or implemented these additions.
+No model has been trained. Future
 entries will name actual assistance and verification, without claiming it in advance.
 
 ## Data acknowledgement
@@ -416,8 +525,8 @@ file: [Dowling et al. (2015)](https://doi.org/10.1016/j.ijrobp.2015.08.045).
 
 ## References
 
-- COMP3710 Blackboard final-report sheet, downloaded 15 October 2026:
-  COMP3710_Report_2026_draft_v2.3.pdf, especially Sections 2.2-6 and Appendix A.
+- COMP3710 final-report sheet v2.5, retrieved from the official Ed announcement
+  on 26 October 2026, especially Sections 2.2-6 and Appendices A-B.
 - Dai, W. et al. (2021), [CAN3D: Fast 3D Medical Image Segmentation via Compact
   Context Aggregation](https://arxiv.org/abs/2109.05443), main reference [5].
 - Ronneberger, O., Fischer, P. and Brox, T. (2015), [U-Net: Convolutional
