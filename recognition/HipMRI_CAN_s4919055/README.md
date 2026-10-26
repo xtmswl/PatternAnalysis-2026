@@ -582,58 +582,65 @@ discussing it with the tutor.
 
 ### Written feasibility review
 
-**User need and scope.** Build an educational contour-drafting prototype for
-an imaging specialist to review. Investigate whether Hard CAN3D improves
-prostate boundaries and continuity over a standard 2D U-Net enough to justify
-its computation. Use the course HipMRI dataset and predict all six labels;
-prostate is code 5. Automated clinical deployment is outside this prototype.
+**1. Topic and purpose.** Segment the prostate and nearby structures in
+HipMRI scans. The input is an MRI; the target is an expert-labelled mask.
+The intended user is an imaging specialist reviewing suggested contours.
+My question is whether 3D context improves prostate boundaries and continuity
+enough to justify its computation compared with a 2D baseline.
 
-**Proposed acceptance criteria.** (1) Zero overlap between filename-derived
-patient groups in train, validation and test. (2) Target held-out prostate
-Dice at least 0.70, while reporting every class's Dice/IoU and the exact
-aggregation. (3) Present 3-5 real failure cases, including base/apex or
-boundary leakage, with truth/prediction/false-positive/false-negative panels.
-(4) Run a batch-one 3D pilot within a proposed 35 GiB peak allocated-memory
-budget on one 40 GB A100. (5) Measure parameters, peak VRAM and seconds per
-complete case for both models under the same evaluation conditions, rather
-than assuming 3D is better. These criteria are not yet achieved model results.
+**2. Models and course methods.** My planned Hard model is CAN3D (Dai et al.,
+2021), using 3D dilated convolutions to combine context across slices. The
+implemented baseline is 2D U-Net (Ronneberger et al., 2015), which processes
+one slice at a time with encoder/decoder skip connections. The baseline
+uses the course's explicit PyTorch training loop, Adam and multiclass soft
+Dice loss. This loss adapts the paper's training recipe; it is not its
+specialised Dice Squared Focal loss. CAN3D implementation is still pending.
 
-**Choice and course basis.** CAN3D uses compact 3D dilated context aggregation
-(Dai et al., 2021); the baseline follows U-Net (Ronneberger et al., 2015).
-Course concepts are convolution, dilation, encoder/decoder skips, one-hot
-masks, per-class Dice, validation, Adam and an explicit backpropagation loop.
-Use the same saved patient split and preprocessing for both models. Start
-with per-volume z-score and an aligned 64x128x128 full-volume pilot grid;
-trilinear MRI and nearest-exact labels. This fixes voxel counts, not physical
-spacing. The initial loss is lecture-based soft Dice, an explicit adaptation
-from the CAN3D paper's specialised DSF loss.
+**3. Dataset and preprocessing.** The course's Rangpur HipMRI dataset has
+211 scans from 38 filename-derived patient groups. Codes 0-5 represent
+background, body, bones, bladder, rectum and prostate (code 5). The saved
+train/validation/test split is 26/6/6 groups, containing 136/48/27 scans,
+with zero patient-prefix overlap. Both models will reuse this split and
+the same preprocessed volumes: per-volume z-score, RAS orientation,
+64x128x128 pilot size, trilinear MRI resizing, nearest-exact mask resizing
+and six-channel one-hot targets. Fixed size does not mean fixed mm spacing.
 
-**Evidence available.** The real inventory has 211 paired scans from 38
-filename-derived patient groups; all 211 pairs passed the implemented data
-integrity checks. The saved split is 26/6/6 groups and 136/48/27 scans without
-prefix overlap. The publisher confirms codes 0-5. Slurm job 696947 passed a
-tiny Conv3d CUDA forward/backward check on a100-8 (A100 40 GB). Locally, the
-baseline workflow passed 17 synthetic tests. Real CPU job 699944 passed
-three training cases, including the depth-144 case, retaining all six codes.
-No real-data trained model, test Dice or full-model GPU measurement exists.
-The baseline train/predict drivers are ready; CAN3D remains to be implemented.
+**4. Code origin and verification.** This is project-specific PyTorch code
+drafted with Codex assistance, using course materials and the cited papers.
+I ran the real-data checks and supplied the terminal outputs. The baseline
+has no pretrained weights. Current files are modules.py, dataset.py,
+train.py and predict.py, with shared experiment utilities. Checks include
+17 local synthetic tests, the 211-pair integrity audit, a three-case real
+loader pilot and a tiny A100 CUDA forward/backward test. AI assistance is
+disclosed in the README; I remain responsible for explaining and verifying
+the implementation.
 
-**Budget, risks and next experiment.** Inspect the saved loader JSON's
-post-resize counts, then run the ten-minute GPU debug job on a few slices
-from one training case, checking updates, weight reload and plots before
-full training. Initially cap each subsequent fit pilot at two
-hours, with one volume per 3D batch or eight slices per 2D batch; record
-actual use before expanding. Main risks are
-queue delays, small-organ loss from downsampling, imbalance and unverified
-patient identity beyond filenames. Compare preprocessing changes using
-training/validation only. Keep the working 2D baseline as fallback; any
-difficulty change needs an explicit scope decision. Final recommendation
-must follow measured accuracy, boundary failures and compute costs.
+**5. Evaluation and proposed success criteria.** Target held-out prostate
+Dice at least 0.70; report every class's Dice and IoU, including scan-macro
+and patient-macro averages. Use identical evaluation patients for both
+models. Inspect 3-5 actual failures, especially base/apex and boundary
+leakage, using truth, prediction and false-positive/false-negative panels.
+Compare parameter count, peak allocated GPU memory and seconds per complete
+case. The proposed 3D memory limit is 35 GiB on one 40 GB A100. These are
+targets and planned measurements, not achieved results.
 
-**AI assistance.** Codex helped draft the code, tests and this review. The
-student ran real audits and supplied the GPU log; independent explanation of
-the new loader/model choices is still to be demonstrated. Detailed disclosure
-and references follow below.
+**6. Current progress and problems.** Pairing, splitting and integrity
+checks passed. Job 699944 loaded B006_Week0, K019_Week1 and B006_Week1,
+retaining all six labels; job 696947 passed the tiny CUDA check. Baseline
+training/prediction scripts are ready, but no real-data model has been
+trained and no test Dice is available. Main risks are the very small
+prostate class, boundary loss from resizing, variable scan depth and GPU
+queue delays. Patient grouping still relies on documented filename prefixes.
+
+**7. Next steps, improvements and fallback.** First run the ten-minute,
+100-step GPU debug job on a few slices from one training case, checking
+loss reduction, weight updates and reload. Then train the baseline and
+implement CAN3D. Choose settings/checkpoints with validation data only;
+reserve test data until choices are fixed. Inspect overlays before changing
+resolution or training duration. Initially budget two hours per fit pilot,
+with eight slices per 2D batch or one volume per 3D batch. Keep the tested
+2D baseline as fallback; discuss any difficulty change explicitly. Recommend
+the model only after comparing measured boundaries, overlap and costs.
 
 ## Artificial Intelligence Usage Disclosure
 
