@@ -27,8 +27,11 @@ same_shape, same_affine and finite_nonnegative_integer_labels. Local
 synthetic checks also cover shape/affine mismatches and fractional labels.
 
 The 2D U-Net baseline, soft Dice loss and baseline training/prediction drivers
-have local synthetic checks. CAN3D remains unimplemented. There are no
-real-data trained checkpoints, test scores or full-model GPU measurements.
+have local synthetic checks. On 27 October, the student supplied the output
+of real GPU debug job 700021: BASELINE_DEBUG_PASSED and
+PREDICTION_PREVIEW_SAVED, with an empty displayed .err log. This establishes
+short training and saved-weight inference on a training case, not generalization.
+CAN3D remains unimplemented; full baseline training and held-out testing remain pending.
 On 26 October the student supplied the output of Slurm job 696947 on a100-8:
 CUDA available=True, NVIDIA A100-PCIE-40GB, CUDA_CHECK_PASSED. This establishes
 the tiny diagnostic's GPU execution, not segmentation accuracy or CAN3D memory.
@@ -413,10 +416,31 @@ debug_report.json,debug.pt,curves.png}. The script then runs predict.py on
 that same training case in a new process and writes previews under
 runs/baseline_preview_JOBID. Require BASELINE_DEBUG_PASSED and
 PREDICTION_PREVIEW_SAVED in its .out; inspect .err as well. The real A100
-run of this new script is still pending. Submit once, then query with squeue.
+run passed in job 700021, as shown in the student's 27 October screenshot.
+Selected-training loss decreased from 0.903778 to 0.435347 in 100 steps;
+selected-slice prostate Dice reached 0.8743. The complete B006_Week0 training-case
+preview had prostate Dice 0.2814 and reported 0.2223 seconds per case.
+The selected slices and complete volume have different evaluation scopes;
+neither result is a validation/test score or a controlled final resource benchmark.
+Parameter count was 1,940,902. Detailed saved JSON reports and Slurm accounting
+have not been inspected. Submit once, then query with squeue.
 
-After debugging succeeds, a full baseline fit can be launched **inside an
-appropriate compute allocation**, for example:
+The saved baseline_fit.slurm requests one GPU for a two-hour initial fit,
+using all 136 training scans and the saved validation split for 30 requested
+epochs. It never evaluates the test split. The wall-time budget is a pilot
+limit, not an estimate or guarantee that 30 epochs will finish:
+
+```bash
+mkdir -p runs
+sbatch baseline_fit.slurm
+```
+
+Inspect runs/baseline_fit_JOBID.out and .err; checkpoints, history and curves
+are under runs/baseline_fit_JOBID/. Require BASELINE_FIT_COMPLETED before
+claiming all requested epochs finished. If interrupted, preserve both best.pt
+and last.pt for resumption into a new output directory.
+
+Alternatively, **inside an appropriate compute allocation**:
 
 ```bash
 python train.py --mode fit --device cuda --epochs 30 --output runs/baseline_fit_seed42
@@ -605,12 +629,12 @@ Proposed acceptance targets:
 
 - All 211 image/mask pairs passed integrity checks; three real training cases passed the resized loader check.
 - A tiny A100 CUDA forward/backward test passed; baseline code passed 17 local synthetic tests.
-- GPU baseline debug job 700021 is submitted; its result is unverified. CAN3D and full training/test results remain pending.
+- GPU baseline debug job 700021 passed its 100-step training and prediction checks; full training/test results and CAN3D remain pending.
 
 **4. Risks, Budget & Fallback**
 
 - Risks: a small prostate class, loss of boundary detail during resizing and GPU queues.
-- Next: inspect the 100-step baseline debug run, train the baseline, then implement CAN3D.
+- Next: train the baseline on all training cases with validation, then implement CAN3D.
 - Budget: one GPU; ten-minute debug allocation, then two-hour fit pilots; eight slices per 2D batch or one volume per 3D batch.
 - Fallback: retain the tested 2D baseline. Adjust settings with validation data; use the test split only after choices are fixed.
 
@@ -654,8 +678,11 @@ output for job 699944. Codex added the baseline Adam/debug/fit/test driver,
 checkpoint persistence/resume, metrics, reload/prediction and plots. The
 expanded 17-test suite includes actual synthetic training and safe held-out
 access tests. The student has not independently explained or implemented
-these additions. No model has been trained on real MRI yet. Future
-entries will name actual assistance and verification, without claiming it in advance.
+these additions. On 27 October the student supplied the passing real MRI
+GPU debug/prediction output for job 700021. Codex recorded its limited
+training-case scope and added a two-hour baseline fit Slurm script, checked
+with bash -n locally. Full baseline training and CAN3D remain pending.
+Future entries will name actual assistance and verification, without claiming it in advance.
 
 ## Data acknowledgement
 
