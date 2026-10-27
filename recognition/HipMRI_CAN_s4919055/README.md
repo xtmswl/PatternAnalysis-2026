@@ -595,6 +595,35 @@ can be supplied with INSPECT_CHECKPOINT. Logs are runs/baseline_inspect_JOBID
 /validation. Wait for BASELINE_INSPECTION_COMPLETED, then inspect the actual
 panels and metrics; a marker only confirms the commands completed.
 
+Inspection job 704533 finished both previews with an empty displayed .err.
+The downloaded PNGs were visually inspected and the prediction NIfTI/JSON
+files were received locally. B006_Week0 (training) has 1,287 true prostate
+voxels and zero predicted; C032_Week0 (validation) has 683 true and zero
+predicted. Both prostate Dice values are zero; rectum Dice values are 0.5680
+and 0.3710 respectively. Both previews record the same checkpoint SHA256.
+The displayed labels are present in the MRI panels, with no obvious global
+offset in these examples, but these previews cannot certify all anatomical
+annotations or rule out every preprocessing issue. The failure on a training
+example means this is not solely evidence of poor unseen-patient performance.
+
+The next bounded diagnostic extends the same balanced model from epoch 3
+to epoch 8 (five additional epochs), retaining Adam state, best checkpoint,
+history, split, input grid, loss, sampling and hyperparameters. It is not a
+restart and makes no claim that longer training will necessarily solve the
+prostate failure. At roughly four minutes per completed pilot epoch, the
+40-minute allocation is an upper budget; actual runtime remains variable.
+
+```bash
+sbatch baseline_balance_resume.slurm
+```
+
+The source last.pt and matching best.pt remain under
+runs/baseline_balance_704488/. New artifacts go under
+runs/baseline_balance_resume_JOBID/; logs use the same stem with .out/.err.
+Review per-class predictions and validation results before another extension.
+If prostate remains absent at epoch 8, revisit the optimization/loss diagnosis
+instead of automatically requesting another long fit. No test cases are used.
+
 All 20 local synthetic tests passed, including rare-positive batch composition,
 reproducibility, single-group fallback, real optimization/checkpoint resume,
 refusal to change sampling on resume and held-out access guards. The new
