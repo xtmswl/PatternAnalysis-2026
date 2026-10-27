@@ -31,7 +31,11 @@ have local synthetic checks. On 27 October, the student supplied the output
 of real GPU debug job 700021: BASELINE_DEBUG_PASSED and
 PREDICTION_PREVIEW_SAVED, with an empty displayed .err log. This establishes
 short training and saved-weight inference on a training case, not generalization.
-CAN3D remains unimplemented; full baseline training and held-out testing remain pending.
+The first baseline fit, job 703884, completed 25 of 30 requested epochs before
+the two-hour allocation expired. Its last validation report predicted no
+bladder, rectum or prostate voxels; this is a failed organ-segmentation pilot,
+not a successful baseline. CAN3D remains unimplemented; a usable trained
+baseline and held-out testing remain pending.
 On 26 October the student supplied the output of Slurm job 696947 on a100-8:
 CUDA available=True, NVIDIA A100-PCIE-40GB, CUDA_CHECK_PASSED. This establishes
 the tiny diagnostic's GPU execution, not segmentation accuracy or CAN3D memory.
@@ -503,6 +507,68 @@ Known-count Dice/IoU, empty classes and unequal patient scan counts also have
 independent expected-answer checks. Synthetic plotting samples stay private
 and are not presented as real MRI results.
 
+## First full-fit failure and controlled sampling pilot
+
+Job 703884 ran on an A100 for two hours and timed out after 25 completed
+epochs. Its downloaded config, history and latest validation JSON match the
+saved manifest, all 48 validation cases and the original source hashes.
+Each of the 25 validation prostate Dice values was exactly zero in history.
+The epoch-25 report contains:
+
+| Class | Patient-macro validation Dice | True voxels | Predicted voxels |
+|---|---:|---:|---:|
+| Background | 0.9966 | 30,185,205 | 30,147,598 |
+| Body | 0.9777 | 18,184,941 | 18,596,637 |
+| Bones | 0.9006 | 1,663,100 | 1,587,413 |
+| Bladder | 0 | 180,936 | 0 |
+| Rectum | 0 | 67,549 | 0 |
+| Prostate | 0 | 49,917 | 0 |
+
+Thus decreased mean training loss did not establish usable small-organ
+segmentation. The labels exist in every validation case, ruling out missing
+validation prostate targets as the explanation. Class/slice imbalance is a
+plausible optimization issue, not a proven sole cause. Data/preprocessing,
+prediction overlays and training coverage remain relevant diagnostic checks.
+These are validation findings, not held-out test results or final failure
+case autopsies. The timed-out run's files are retained.
+
+The next separate run changes **only training slice sampling**. The original
+`--slice-sampling all` remains the default. Optional `prostate-balanced`
+draws half of each training case's slice budget from slices with label 5
+and half without; positive slices may repeat and some other slices are not
+visited that epoch. It still reads all training cases and uses the same total
+slice budget per epoch. Interleaving guarantees 4 positive and 4 negative
+slices for the pilot's even batch size of 8 when both groups exist. If a
+case has only one group, every slice is used once. Whole-volume validation
+and final testing never use this sampling or mask-based input selection.
+
+This is a documented training adaptation to investigate the failure, not a
+claimed exact lecture recipe or a demonstrated improvement. Architecture,
+soft Dice loss, Adam learning rate, seed, grid and patient split are retained.
+Start from the same random seed in a new run; changing sampling is refused
+when resuming a different sampling configuration. For later comparison with
+CAN3D, disclose this 2D batch-composition choice and compare on identical
+whole-volume evaluation cases with clearly stated training budgets.
+
+```bash
+mkdir -p runs
+sbatch baseline_balance_pilot.slurm
+```
+
+This requests one GPU for at most 30 minutes and 3 epochs, writing logs to
+runs/baseline_balance_JOBID.out/.err and reports/checkpoints under
+runs/baseline_balance_JOBID/. It does not resume or overwrite job 703884 and
+does not access test images. New logs show training/validation phases, epoch
+duration, sampled prostate-slice counts and validation predicted voxel counts
+for every class. Inspect organ predictions and validation Dice before choosing
+a longer fit. Three epochs are a diagnostic budget, not sufficient evidence
+of convergence or a guarantee that sampling alone solves the failure.
+
+All 20 local synthetic tests passed, including rare-positive batch composition,
+reproducibility, single-group fallback, real optimization/checkpoint resume,
+refusal to change sampling on resume and held-out access guards. The new
+sampling pilot has not yet been run on real MRI.
+
 ## Planned training and comparison
 
 Use readable PyTorch modules and the teacher's training sequence:
@@ -629,12 +695,12 @@ Proposed acceptance targets:
 
 - All 211 image/mask pairs passed integrity checks; three real training cases passed the resized loader check.
 - A tiny A100 CUDA forward/backward test passed; baseline code passed 17 local synthetic tests.
-- GPU baseline debug job 700021 passed its 100-step training and prediction checks; full training/test results and CAN3D remain pending.
+- GPU debug 700021 passed; the first full-fit pilot timed out after 25 epochs and missed small organs on validation. A sampling diagnostic and CAN3D remain pending.
 
 **4. Risks, Budget & Fallback**
 
 - Risks: a small prostate class, loss of boundary detail during resizing and GPU queues.
-- Next: train the baseline on all training cases with validation, then implement CAN3D.
+- Next: diagnose the failed small-organ predictions, test balanced training slices, then implement CAN3D.
 - Budget: one GPU; ten-minute debug allocation, then two-hour fit pilots; eight slices per 2D batch or one volume per 3D batch.
 - Fallback: retain the tested 2D baseline. Adjust settings with validation data; use the test split only after choices are fixed.
 
@@ -681,7 +747,12 @@ access tests. The student has not independently explained or implemented
 these additions. On 27 October the student supplied the passing real MRI
 GPU debug/prediction output for job 700021. Codex recorded its limited
 training-case scope and added a two-hour baseline fit Slurm script, checked
-with bash -n locally. Full baseline training and CAN3D remain pending.
+with bash -n locally. The student ran the full-fit pilot and downloaded its
+JSON reports after the two-hour timeout. Codex checked all 25 history entries,
+per-class true/predicted counts, validation identities and source/manifest
+hashes, then added an optional balanced training-slice sampler and a separate
+three-epoch GPU pilot. All 20 synthetic tests passed. This sampling change
+has not yet been validated on real MRI; CAN3D remains unimplemented.
 Future entries will name actual assistance and verification, without claiming it in advance.
 
 ## Data acknowledgement

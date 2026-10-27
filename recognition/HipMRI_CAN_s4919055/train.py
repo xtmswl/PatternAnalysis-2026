@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import platform
 import socket
+import time
 
 import nibabel
 import numpy as np
@@ -39,6 +40,40 @@ def optimize_batch(model, optimizer, criterion, image, target):
             raise RuntimeError('Missing or nonfinite gradient.')
     optimizer.step()
     return loss.item()
+
+
+def training_slice_order(mask, generator, sampling='all'):
+    """Training-only slice indices; retain the original number of optimizer steps.
+
+    'all' visits every slice once. 'prostate-balanced' draws half the slice
+    budget from training slices containing label 5, with replacement when
+    necessary, and half from the remaining slices. Interleaving the groups
+    gives equal positive/negative counts in even-sized batches. If either
+    group is absent, use every slice once rather than discard the case.
+    This is an experimental batch-composition change, not a new network/loss.
+    """
+    if mask.ndim != 3 or mask.shape[0] < 1:
+        raise ValueError('Need a nonempty D,H,W training mask.')
+    if sampling not in ('all', 'prostate-balanced'):
+        raise ValueError('Unknown slice sampling strategy.')
+    depth = len(mask)
+    if sampling == 'all':
+        return torch.randperm(depth, generator=generator)
+    has_prostate = (mask == 5).flatten(1).any(1)
+    positive = torch.where(has_prostate)[0]
+    negative = torch.where(~has_prostate)[0]
+    if not len(positive) or not len(negative):
+        return torch.randperm(depth, generator=generator)
+
+    def draw(pool, count):
+        if count <= len(pool):
+            return pool[torch.randperm(len(pool), generator=generator)[:count]]
+        return pool[torch.randint(len(pool), (count,), generator=generator)]
+
+    order = torch.empty(depth, dtype=torch.long)
+    order[0::2] = draw(positive, (depth+1)//2)
+    order[1::2] = draw(negative, depth//2)
+    return order
 
 
 def run_debug(args, dataset, device, model, config):
@@ -112,6 +147,8 @@ def run_fit(args, train_data, device, model, config):
         for key in resume_keys:
             if config[key] != old[key]:
                 raise ValueError(f'Resume configuration mismatch: {key}')
+        if config['slice_sampling'] != old.get('slice_sampling', 'all'):
+            raise ValueError('Resume cannot change slice sampling; start a separate experiment.')
         model.load_state_dict(checkpoint['model_state'])
         optimizer.load_state_dict(checkpoint['optimizer_state'])
         best, history = checkpoint['best_validation_prostate'], checkpoint['history']
@@ -121,18 +158,23 @@ def run_fit(args, train_data, device, model, config):
         # Keep the previous best even if no resumed epoch improves it.
         best_checkpoint = torch.load(args.resume.parent/'best.pt', map_location='cpu', weights_only=True)
         if (any(best_checkpoint['config'][key] != old[key] for key in resume_keys)
+                or best_checkpoint['config'].get('slice_sampling', 'all') != old.get('slice_sampling', 'all')
                 or best_checkpoint['best_validation_prostate'] != best):
             raise ValueError('Resume requires the matching best.pt beside last.pt.')
         torch.save(best_checkpoint, args.output/'best.pt')
     for epoch in range(start_epoch, args.epochs+1):
+        epoch_start = time.perf_counter()
+        print(f'Epoch {epoch}: training {len(train_data)} cases; '
+              f'slice_sampling={args.slice_sampling}', flush=True)
         generator = torch.Generator().manual_seed(args.seed+epoch)
-        total_loss, total_slices = 0., 0
+        total_loss, total_slices, prostate_slices = 0., 0, 0
         if device.type == 'cuda':
             torch.cuda.reset_peak_memory_stats()
         for index in torch.randperm(len(train_data), generator=generator).tolist():
             sample = train_data[index]
             images, targets = volume_to_slices(sample['image'], sample['target'])
-            order = torch.randperm(len(images), generator=generator)
+            order = training_slice_order(sample['mask'], generator, args.slice_sampling)
+            prostate_slices += int((sample['mask'][order] == 5).flatten(1).any(1).sum())
             for first in range(0, len(order), args.batch_size):
                 indices = order[first:first+args.batch_size]
                 image, target = images[indices].to(device), targets[indices].to(device)
@@ -140,13 +182,16 @@ def run_fit(args, train_data, device, model, config):
                 total_loss += loss*len(indices)
                 total_slices += len(indices)
         training_peak = torch.cuda.max_memory_allocated()/2**20 if device.type == 'cuda' else None
+        print(f'Epoch {epoch}: validation on {len(validation)} complete scans', flush=True)
         validation_report = evaluate_cases(model, validation, device, args.batch_size)
         score = validation_report['patient_macro_dice'][5]
         if score is None:
             raise ValueError('No evaluable validation prostate cases.')
         entry = {'epoch': epoch, 'train_loss': total_loss/total_slices,
                  'validation_loss': validation_report['mean_soft_dice_loss'],
-                 'prostate_dice': score, 'peak_training_allocated_mib': training_peak}
+                 'prostate_dice': score, 'peak_training_allocated_mib': training_peak,
+                 'sampled_slices': total_slices, 'sampled_prostate_slices': prostate_slices,
+                 'epoch_seconds': time.perf_counter()-epoch_start}
         history.append(entry)
         improved = score > best
         best = max(best, score)
@@ -159,7 +204,12 @@ def run_fit(args, train_data, device, model, config):
         save_json(args.output/'validation_latest.json', validation_report)
         plot_history(history, args.output/'curves.png', 'fit')
         print(f'Epoch {epoch}: train_loss={entry["train_loss"]:.6f}, '
-              f'validation patient-macro prostate Dice={score:.4f}', flush=True)
+              f'validation patient-macro prostate Dice={score:.6f}, '
+              f'sampled prostate slices={prostate_slices}/{total_slices}, '
+              f'seconds={entry["epoch_seconds"]:.1f}', flush=True)
+        print('Validation predicted voxels by class 0..5: '+str([
+            sum(case['predicted_voxels'][c] for case in validation_report['cases'])
+            for c in range(6)]), flush=True)
     print('BASELINE_FIT_COMPLETED; test data have not been evaluated.')
     return 0
 
@@ -178,6 +228,8 @@ def main(argv=None):
     parser.add_argument('--epochs', type=int, default=30)
     parser.add_argument('--debug-steps', type=int, default=100)
     parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--slice-sampling', choices=['all', 'prostate-balanced'], default='all',
+                        help='Fit only: training slice composition; validation/test stay unchanged.')
     parser.add_argument('--resume', type=Path, help='Resume a fit-mode last.pt, in a new output directory.')
     parser.add_argument('--checkpoint', type=Path, help='Fixed fit checkpoint for mode=test.')
     parser.add_argument('--final-test', action='store_true', help='Explicitly authorize held-out evaluation after choices are fixed.')
@@ -189,6 +241,8 @@ def main(argv=None):
         parser.error('H and W must be multiples of 16 for this U-Net.')
     if args.resume and args.mode != 'fit':
         parser.error('--resume is only for fit mode.')
+    if args.mode != 'fit' and args.slice_sampling != 'all':
+        parser.error('--slice-sampling only changes fit-mode training.')
     if args.mode == 'test' and (not args.final_test or not args.checkpoint):
         parser.error('test mode requires --checkpoint and --final-test.')
     if args.mode != 'test' and (args.final_test or args.checkpoint):
@@ -200,6 +254,7 @@ def main(argv=None):
     config = {'model': 'unet2d', 'mode': args.mode, 'base_channels': args.base_channels,
               'shape_dhw': list(args.shape), 'seed': args.seed, 'batch_size': args.batch_size,
               'learning_rate': args.learning_rate, 'manifest_sha256': file_sha256(args.manifest),
+              'slice_sampling': args.slice_sampling,
               'normalization': 'per-volume population z-score before resize',
               'loss': 'equal six-class soft Dice including background',
               'source_sha256': {name: file_sha256(Path(__file__).with_name(name))

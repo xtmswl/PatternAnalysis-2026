@@ -16,7 +16,7 @@ import torch
 
 from dataset import build_inventory, make_patient_split
 from experiment import hard_overlap, aggregate_cases
-from train import main as train_main
+from train import main as train_main, training_slice_order
 from predict import main as predict_main
 
 
@@ -37,6 +37,29 @@ class MetricTests(unittest.TestCase):
         report = aggregate_cases(cases)
         self.assertEqual(report['case_macro_dice'][5], .75)
         self.assertEqual(report['patient_macro_dice'][5], .5)
+
+
+class SliceSamplingTests(unittest.TestCase):
+    def test_balanced_batches_retain_negatives_and_step_budget(self):
+        mask = torch.zeros(64, 4, 4, dtype=torch.long)
+        mask[9, 1, 1] = 5
+        a = training_slice_order(mask, torch.Generator().manual_seed(42), 'prostate-balanced')
+        b = training_slice_order(mask, torch.Generator().manual_seed(42), 'prostate-balanced')
+        self.assertTrue(torch.equal(a, b))
+        self.assertEqual(len(a), 64)
+        flags = (mask[a] == 5).flatten(1).any(1)
+        self.assertTrue(torch.equal(flags.reshape(-1, 8).sum(1), torch.full((8,), 4)))
+        # The sole positive necessarily repeats; negative slices remain present.
+        self.assertEqual(int((a == 9).sum()), 32)
+        self.assertEqual(len(a[1::2].unique()), 32)
+
+    def test_all_and_single_group_fallback_visit_every_slice(self):
+        for fill, strategy in [(0, 'all'), (0, 'prostate-balanced'), (5, 'prostate-balanced')]:
+            mask = torch.full((7, 2, 2), fill, dtype=torch.long)
+            order = training_slice_order(mask, torch.Generator().manual_seed(3), strategy)
+            self.assertTrue(torch.equal(order.sort().values, torch.arange(7)))
+        with self.assertRaises(ValueError):
+            training_slice_order(torch.zeros(0, 2, 2), torch.Generator())
 
 
 class DriverTests(unittest.TestCase):
@@ -119,6 +142,29 @@ class DriverTests(unittest.TestCase):
         config = json.loads((result/'config.json').read_text())
         self.assertEqual(config['shape_dhw'], [4, 16, 16])
         self.assertEqual(config['base_channels'], 2)
+
+    def test_balanced_fit_records_sampling_and_refuses_changed_resume(self):
+        self.remove_split_files('test')
+        # Only one of four slices has prostate: balanced sampling must repeat it.
+        labels = np.zeros((16, 16, 4), dtype=np.int16)
+        labels[4:12, 4:12, 0] = 5
+        for name in ['train', 'validation']:
+            for scan in self.manifest['splits'][name]['scans']:
+                nib.save(nib.Nifti1Image(labels, np.eye(4)),
+                         self.root/'semantic_labels_only'/f'{scan["case_id"]}_SEMANTIC.nii.gz')
+        out = self.root/'balanced'
+        args = self.common+self.training+['--mode', 'fit', '--slice-sampling', 'prostate-balanced']
+        self.assertEqual(self.quiet(train_main, args+['--epochs', '1', '--output', str(out)]), 0)
+        history = json.loads((out/'history.json').read_text())
+        self.assertEqual(history[0]['sampled_slices'], 4)
+        self.assertEqual(history[0]['sampled_prostate_slices'], 2)
+        # A continuation cannot silently change sampling and claim the same run.
+        with self.assertRaisesRegex(ValueError, 'sampling'):
+            self.quiet(train_main, self.common+self.training+[
+                '--mode', 'fit', '--resume', str(out/'last.pt'), '--epochs', '2',
+                '--output', str(self.root/'wrong-resume')])
+        self.assertEqual(self.quiet(train_main, args+['--resume', str(out/'last.pt'),
+            '--epochs', '2', '--output', str(self.root/'balanced-resume')]), 0)
 
 
 if __name__ == '__main__':
