@@ -564,10 +564,39 @@ for every class. Inspect organ predictions and validation Dice before choosing
 a longer fit. Three epochs are a diagnostic budget, not sufficient evidence
 of convergence or a guarantee that sampling alone solves the failure.
 
+The student's log for balanced pilot 704488 shows all 3 epochs completed on
+CUDA. Each epoch drew 4,352 prostate-positive slices out of 8,704 draws,
+confirming the intended 50% sampling. Training losses were 0.588142, 0.544909
+and 0.466477; epoch times were 249.6, 244.6 and 266.1 seconds (excluding some
+checkpoint/plot overhead). Validation prostate Dice remained displayed as
+0.000000, with exactly zero predicted prostate and bladder voxels. Predicted
+rectum counts changed from 0 to 676 to 11,456; nonzero counts alone do not
+prove correct segmentation. BASELINE_FIT_COMPLETED was shown, while .err and
+the detailed JSON reports have not yet been inspected. Three epochs do not
+establish convergence or demonstrate that this sampling change fixes the
+prostate failure. Preserve this run and inspect predictions before extending it.
+
+For one training and one validation case, baseline_inspect.slurm reloads
+the pilot's last.pt and uses CPU inference to save diagnostic masks, prostate
+truth/prediction/error panels and per-class counts. CPU is sufficient for
+these two previews; their timing is not a comparable GPU benchmark. It reads
+no test images and updates no weights:
+
+```bash
+sbatch baseline_inspect.slurm
+```
+
+The default checkpoint is runs/baseline_balance_704488/last.pt; an alternate
+can be supplied with INSPECT_CHECKPOINT. Logs are runs/baseline_inspect_JOBID
+(.out/.err); preview subfolders are runs/baseline_inspect_JOBID/train and
+/validation. Wait for BASELINE_INSPECTION_COMPLETED, then inspect the actual
+panels and metrics; a marker only confirms the commands completed.
+
 All 20 local synthetic tests passed, including rare-positive batch composition,
 reproducibility, single-group fallback, real optimization/checkpoint resume,
 refusal to change sampling on resume and held-out access guards. The new
-sampling pilot has not yet been run on real MRI.
+sampling functionality has real confirmation in the pilot above; improved
+prostate segmentation has not been demonstrated.
 
 ## Planned training and comparison
 
