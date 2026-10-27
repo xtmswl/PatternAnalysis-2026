@@ -570,9 +570,12 @@ confirming the intended 50% sampling. Training losses were 0.588142, 0.544909
 and 0.466477; epoch times were 249.6, 244.6 and 266.1 seconds (excluding some
 checkpoint/plot overhead). Validation prostate Dice remained displayed as
 0.000000, with exactly zero predicted prostate and bladder voxels. Predicted
-rectum counts changed from 0 to 676 to 11,456; nonzero counts alone do not
-prove correct segmentation. BASELINE_FIT_COMPLETED was shown, while .err and
-the detailed JSON reports have not yet been inspected. Three epochs do not
+rectum counts changed from 0 to 676 to 114,516 (the final count is confirmed
+by the downloaded JSON; the terminal line wrapped). The downloaded config,
+history and validation report match the saved manifest and all 48 validation
+cases. Epoch-3 patient-macro rectum Dice was 0.5600, while bladder and prostate
+Dice were exactly zero. BASELINE_FIT_COMPLETED was shown; .err has not yet
+been supplied. Three epochs do not
 establish convergence or demonstrate that this sampling change fixes the
 prostate failure. Preserve this run and inspect predictions before extending it.
 
