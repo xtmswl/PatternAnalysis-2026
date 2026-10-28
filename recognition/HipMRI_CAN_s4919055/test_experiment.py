@@ -126,7 +126,14 @@ class DriverTests(unittest.TestCase):
         # The retained best can legitimately come from a different host/job.
         best = torch.load(first/'best.pt', weights_only=True)
         best['config']['hostname'] = 'earlier-host'
+        # Original real checkpoints lack these subsequently introduced options.
+        best['config'].pop('loss_kind')
+        best['config'].pop('slice_sampling')
         torch.save(best, first/'best.pt')
+        last = torch.load(first/'last.pt', weights_only=True)
+        last['config'].pop('loss_kind')
+        last['config'].pop('slice_sampling')
+        torch.save(last, first/'last.pt')
         self.assertEqual(self.quiet(train_main, args+['--epochs', '2', '--resume', str(first/'last.pt'), '--output', str(resumed)]), 0)
         self.assertTrue((resumed/'best.pt').is_file())
         self.assertEqual(len(json.loads((resumed/'history.json').read_text())), 2)
@@ -165,6 +172,32 @@ class DriverTests(unittest.TestCase):
                 '--output', str(self.root/'wrong-resume')])
         self.assertEqual(self.quiet(train_main, args+['--resume', str(out/'last.pt'),
             '--epochs', '2', '--output', str(self.root/'balanced-resume')]), 0)
+
+    def test_dice_ce_objective_reporting_resume_and_checkpoint_evaluation(self):
+        self.remove_split_files('test')
+        out = self.root/'dice-ce'
+        args = self.common+self.training+['--mode', 'fit', '--loss', 'dice-ce',
+            '--slice-sampling', 'prostate-balanced']
+        self.assertEqual(self.quiet(train_main, args+['--epochs', '1', '--output', str(out)]), 0)
+        report = json.loads((out/'validation_latest.json').read_text())
+        history = json.loads((out/'history.json').read_text())
+        self.assertEqual(report['loss_kind'], 'dice-ce')
+        self.assertGreater(report['mean_objective_loss'], report['mean_soft_dice_loss'])
+        self.assertAlmostEqual(history[0]['validation_loss'], report['mean_objective_loss'])
+        self.assertAlmostEqual(history[0]['validation_soft_dice_loss'], report['mean_soft_dice_loss'])
+        with self.assertRaisesRegex(ValueError, 'loss'):
+            self.quiet(train_main, self.common+self.training+['--mode', 'fit',
+                '--slice-sampling', 'prostate-balanced', '--resume', str(out/'last.pt'),
+                '--epochs', '2', '--output', str(self.root/'wrong-loss-resume')])
+        self.assertEqual(self.quiet(train_main, args+['--resume', str(out/'last.pt'),
+            '--epochs', '2', '--output', str(self.root/'dice-ce-resume')]), 0)
+        # Test-mode objective comes from the frozen checkpoint, not CLI defaults.
+        for scan in self.manifest['splits']['test']['scans']:
+            self.write_case(scan['case_id'])
+        test_out = self.root/'dice-ce-test'
+        self.assertEqual(self.quiet(train_main, self.common+['--mode', 'test',
+            '--final-test', '--checkpoint', str(out/'best.pt'), '--output', str(test_out)]), 0)
+        self.assertEqual(json.loads((test_out/'test_metrics.json').read_text())['loss_kind'], 'dice-ce')
 
 
 if __name__ == '__main__':

@@ -15,7 +15,7 @@ import time
 import torch
 
 from dataset import LABEL_NAMES, volume_to_slices
-from modules import UNet2D, SoftDiceLoss
+from modules import UNet2D, SoftDiceLoss, segmentation_loss
 
 
 def seed_everything(seed):
@@ -120,14 +120,15 @@ def predict_volume(model, image, device, batch_size=8):
     return torch.cat(outputs).permute(1, 0, 2, 3).contiguous()
 
 
-def evaluate_cases(model, dataset, device, batch_size=8, limit=None):
+def evaluate_cases(model, dataset, device, batch_size=8, limit=None, loss_kind='soft-dice'):
     """Evaluate whole volumes; timing excludes data loading and metric work.
 
     Validation timing is descriptive, not a controlled final benchmark.
     A fresh prediction process has no training optimizer occupying VRAM.
     """
     cases = []
-    criterion = SoftDiceLoss()
+    dice_criterion = SoftDiceLoss()
+    criterion = segmentation_loss(loss_kind)
     for i in range(len(dataset) if limit is None else min(limit, len(dataset))):
         sample = dataset[i]
         if device.type == 'cuda':
@@ -138,8 +139,11 @@ def evaluate_cases(model, dataset, device, batch_size=8, limit=None):
             torch.cuda.synchronize()
         seconds = time.perf_counter()-start
         result = hard_overlap(logits.argmax(0), sample['mask'])
+        dice_loss = dice_criterion(logits[None], sample['target'][None]).item()
+        objective_loss = (dice_loss if loss_kind == 'soft-dice' else
+                          criterion(logits[None], sample['target'][None]).item())
         result.update(case_id=sample['case_id'], patient_id=sample['patient_id'],
-                      soft_dice_loss=criterion(logits[None], sample['target'][None]).item(),
+                      soft_dice_loss=dice_loss, objective_loss=objective_loss,
                       inference_seconds=seconds)
         cases.append(result)
     if not cases:
@@ -147,12 +151,14 @@ def evaluate_cases(model, dataset, device, batch_size=8, limit=None):
     report = aggregate_cases(cases)
     report.update(cases=cases, label_names=LABEL_NAMES,
                   mean_soft_dice_loss=mean_present([case['soft_dice_loss'] for case in cases]),
+                  mean_objective_loss=mean_present([case['objective_loss'] for case in cases]),
+                  loss_kind=loss_kind,
                   mean_inference_seconds=mean_present([case['inference_seconds'] for case in cases]),
                   timing_scope='preprocessed CPU input to reassembled CPU logits; no disk I/O or metrics')
     return report
 
 
-def plot_history(history, output_path, mode):
+def plot_history(history, output_path, mode, loss_kind='soft-dice'):
     os.environ.setdefault('MPLCONFIGDIR', str(Path(output_path).parent / '.mpl-cache'))
     import matplotlib
     matplotlib.use('Agg')
@@ -169,7 +175,7 @@ def plot_history(history, output_path, mode):
         ax.set_xlabel(xkey)
         ax.legend(fontsize=8)
         ax.grid(alpha=.2)
-    axes[0].set_ylabel('soft Dice loss')
+    axes[0].set_ylabel('soft Dice + CE loss' if loss_kind == 'dice-ce' else 'soft Dice loss')
     axes[1].set_ylabel('hard Dice')
     axes[1].set_ylim(0, 1)
     figure.tight_layout()

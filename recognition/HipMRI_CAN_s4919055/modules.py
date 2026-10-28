@@ -93,3 +93,32 @@ class SoftDiceLoss(nn.Module):
         if not self.include_background:
             dice = dice[1:]
         return 1 - dice.mean()
+
+
+class DiceCrossEntropyLoss(nn.Module):
+    """One soft Dice loss plus one mean per-pixel cross-entropy loss.
+
+    Both ingredients are covered in Contact 6/7. Combining them with unit
+    coefficients is this project's controlled experiment, not a claim that
+    the lecturer prescribed this exact recipe. Targets are aligned one-hot
+    labels. CrossEntropyLoss receives raw logits, never softmax probabilities.
+    No class weights or new network components are introduced.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.dice = SoftDiceLoss()
+        self.cross_entropy = nn.CrossEntropyLoss()
+
+    def forward(self, logits, target):
+        dice = self.dice(logits, target)
+        return dice + self.cross_entropy(logits, target.argmax(dim=1))
+
+
+def segmentation_loss(kind='soft-dice'):
+    """Keep the original objective as the default for reproducible old runs."""
+    if kind == 'soft-dice':
+        return SoftDiceLoss()
+    if kind == 'dice-ce':
+        return DiceCrossEntropyLoss()
+    raise ValueError(f'Unknown segmentation loss: {kind}')

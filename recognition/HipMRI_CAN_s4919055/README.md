@@ -45,8 +45,9 @@ The publisher label mapping is now verified. Filename-derived patient
 identity interpretation remains an explicit filename-based assumption.
 The full content audit completed remotely:211checked,211passed,0failed;
 its downloaded report has been independently inspected and matches the
-saved split case list and identity hash. The student plans to complete the
-compulsory check-off on 27 October; completion has not yet been recorded.
+saved split case list and identity hash. On 28 October the student reported
+that the compulsory check-off was completed and the tutor gave no specific
+recommendations. This is student-reported completion, not new model evidence.
 
 ## Research question
 
@@ -632,16 +633,77 @@ prostate segmentation has not been demonstrated.
 
 ## Planned training and comparison
 
+### Loss diagnostic after the eight-epoch balanced run
+
+The student's output for continuation 708234 shows epochs 4-8 completed with
+BASELINE_FIT_COMPLETED and an empty displayed .err. Prostate and bladder
+predicted voxel counts remain zero throughout. Epoch-8 training loss is
+0.369117 and patient-macro prostate Dice is displayed as 0.000000; class
+counts are [30125668,18687976,1455803,0,62201,0]. Detailed continuation JSON
+and checkpoints have not been inspected locally. This fails the diagnostic
+criterion for simply extending the same Dice-only training recipe.
+
+Contact 6 PDF p.31 covers categorical cross-entropy and Dice; Contact 7
+PDF pp.27-28 discusses their behaviour and class imbalance. A separate
+optional `--loss dice-ce` now adds **mean pixel cross-entropy + soft Dice**,
+with coefficient 1 for each. These individual losses are course concepts;
+their sum is a documented project adaptation, not a lecturer-prescribed
+recipe or the CAN3D paper's specialised loss. It is a hypothesis about
+optimization, not a proven explanation of the real checkpoints' failure.
+No class weights, pretrained encoder or new architecture are introduced.
+
+The cross-entropy branch receives raw logits and integer labels derived
+from the aligned one-hot target; it must not receive a pre-applied softmax.
+See the [PyTorch CrossEntropyLoss documentation](https://docs.pytorch.org/docs/2.14/generated/torch.nn.CrossEntropyLoss.html).
+A known-answer numerical test demonstrates a possible saturation mode:
+when one true-prostate pixel is confidently predicted as background,
+Dice-only supplies a tiny correct-class logit gradient, whereas adding CE
+supplies a substantial corrective gradient. This example does not establish
+that the downloaded real model has exactly this internal behaviour.
+
+`baseline_dice_ce_pilot.slurm` requests one GPU for at most 30 minutes and
+three epochs, from the same seed42 initialization as the three-epoch
+balanced pilot. Only the training objective changes: split, input grid,
+architecture, optimizer, learning rate, slice sampling and number of updates
+stay fixed. No old weights are resumed or overwritten; no test images are
+accessed. Use:
+
+```bash
+sbatch baseline_dice_ce_pilot.slurm
+```
+
+Logs are runs/baseline_dice_ce_JOBID.out/.err; checkpoint/report directory
+is runs/baseline_dice_ce_JOBID/. Treat real efficacy as unverified until its
+validation results are available. The numerical loss scale changes, so a
+lower or higher number cannot be compared directly with Dice-only losses.
+Compare per-class hard validation Dice/IoU and predictions. The report keeps
+mean_soft_dice_loss separately from mean_objective_loss; curves show the
+actual objective on both training and validation. Whole-volume validation
+and per-mini-batch training still have different aggregation scopes.
+
+The default `--loss soft-dice` retains the original objective. Checkpoints
+record loss_kind; resume refuses loss changes, and old checkpoints without
+this field are interpreted as soft-dice. Test-mode loss is recovered from
+the frozen checkpoint rather than ignored CLI defaults. All 24 synthetic
+tests passed, including hand-calculated combined loss, a confidently-wrong
+gradient example, 3D empty-target finite gradients, actual combined-loss
+training/validation/resume, old-checkpoint compatibility and test-data guards.
+This verifies code behaviour, not clinical accuracy or a guaranteed remedy.
+
 Use readable PyTorch modules and the teacher's training sequence:
 model.train -> batch to device -> forward -> loss -> optimizer.zero_grad ->
 loss.backward -> optimizer.step. Validation/prediction use model.eval and
 torch.no_grad with no weight updates.
 
-The initial controlled pilot will use Adam and per-class soft Dice loss for
+The original controlled pilot uses Adam and per-class soft Dice loss for
 both models, following the segmentation lectures. Learning rate 1e-3 is a
 candidate from the course CNN example, not a verified MRI optimum. Determine
 batch size, epochs, channel widths and input grid using a small allocated-GPU
 smoke test and validation evidence. Do not perform training on login0.
+
+The later Dice+CE diagnostic above is separate; choose and justify any final
+recipe using validation evidence and apply/disclose comparable training
+choices for the eventual CAN3D comparison.
 
 The CAN3D paper uses a specialised Dice Squared Focal loss and a learning-rate
 schedule. Our initial lecture-based Dice/fixed-rate pilot is an explicit
@@ -725,8 +787,9 @@ or training-performance claim is inferred from this diagnostic.
 
 ## Feasibility review and check-off
 
-The student plans to attend on **27 October 2026**; completion has not yet
-been recorded. The following is the written review draft, prepared 26 October.
+On **28 October 2026**, the student reported completing the consultation;
+the tutor gave no specific recommendations. The following written review
+was initially prepared on 26 October and subsequently updated with evidence.
 Its proposed thresholds and compute limits are project choices, not measured
 results or guarantees. The student needs to read and understand it before
 discussing it with the tutor.
@@ -812,8 +875,13 @@ with bash -n locally. The student ran the full-fit pilot and downloaded its
 JSON reports after the two-hour timeout. Codex checked all 25 history entries,
 per-class true/predicted counts, validation identities and source/manifest
 hashes, then added an optional balanced training-slice sampler and a separate
-three-epoch GPU pilot. All 20 synthetic tests passed. This sampling change
-has not yet been validated on real MRI; CAN3D remains unimplemented.
+three-epoch GPU pilot. The student ran that pilot and an eight-epoch
+continuation; prostate remained absent. Codex inspected the downloaded
+three-epoch reports and real training/validation PNGs/NIfTI predictions,
+then prepared a separate course-based Dice+CE objective diagnostic.
+All 24 synthetic tests passed, including loss arithmetic, gradients,
+reporting and checkpoint compatibility. The new loss has not yet been
+validated on real MRI; CAN3D remains unimplemented.
 Future entries will name actual assistance and verification, without claiming it in advance.
 
 ## Data acknowledgement
@@ -841,7 +909,7 @@ file: [Dowling et al. (2015)](https://doi.org/10.1016/j.ijrobp.2015.08.045).
 
 ## Submission checklist
 
-- [ ] Confirm date and complete compulsory feasibility check-off.
+- [x] Complete compulsory feasibility check-off (student-reported on 28 October).
 - [ ] Audit real 3D images/masks and patient identity; save split manifest.
 - [ ] Implement and verify the five required files and baseline comparison.
 - [ ] Complete training, final test, resource profiling and failure analysis.

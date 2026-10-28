@@ -20,7 +20,7 @@ import torch
 
 from dataset import (DEFAULT_DATA_ROOT, PILOT_SHAPE_DHW, HipMRIVolumeDataset,
                      read_patient_manifest, volume_to_slices)
-from modules import UNet2D, SoftDiceLoss
+from modules import UNet2D, segmentation_loss
 from experiment import (seed_everything, get_device, file_sha256, save_json,
                         save_checkpoint, load_checkpoint, hard_overlap,
                         evaluate_cases, plot_history)
@@ -91,7 +91,7 @@ def run_debug(args, dataset, device, model, config):
     chosen = sorted(chosen)
     image, target = images[chosen].to(device), targets[chosen].to(device)
     truth = target.argmax(1).cpu()
-    criterion = SoftDiceLoss()
+    criterion = segmentation_loss(args.loss)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
     before = {key: value.detach().cpu().clone() for key, value in model.state_dict().items()}
     history = []
@@ -130,14 +130,14 @@ def run_debug(args, dataset, device, model, config):
               'parameter_count': sum(p.numel() for p in model.parameters()),
               'peak_training_allocated_mib': training_peak}
     save_json(args.output/'debug_report.json', report)
-    plot_history(history, args.output/'curves.png', 'debug')
+    plot_history(history, args.output/'curves.png', 'debug', args.loss)
     print('BASELINE_DEBUG_PASSED' if report['passed'] else 'BASELINE_DEBUG_FAILED')
     return 0 if report['passed'] else 1
 
 
 def run_fit(args, train_data, device, model, config):
     validation = HipMRIVolumeDataset(args.manifest, 'validation', args.data_root, tuple(args.shape))
-    criterion = SoftDiceLoss()
+    criterion = segmentation_loss(args.loss)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
     best, start_epoch, history = -1., 1, []
     if args.resume:
@@ -149,6 +149,8 @@ def run_fit(args, train_data, device, model, config):
                 raise ValueError(f'Resume configuration mismatch: {key}')
         if config['slice_sampling'] != old.get('slice_sampling', 'all'):
             raise ValueError('Resume cannot change slice sampling; start a separate experiment.')
+        if config['loss_kind'] != old.get('loss_kind', 'soft-dice'):
+            raise ValueError('Resume cannot change loss; start a separate experiment.')
         model.load_state_dict(checkpoint['model_state'])
         optimizer.load_state_dict(checkpoint['optimizer_state'])
         best, history = checkpoint['best_validation_prostate'], checkpoint['history']
@@ -159,6 +161,7 @@ def run_fit(args, train_data, device, model, config):
         best_checkpoint = torch.load(args.resume.parent/'best.pt', map_location='cpu', weights_only=True)
         if (any(best_checkpoint['config'][key] != old[key] for key in resume_keys)
                 or best_checkpoint['config'].get('slice_sampling', 'all') != old.get('slice_sampling', 'all')
+                or best_checkpoint['config'].get('loss_kind', 'soft-dice') != old.get('loss_kind', 'soft-dice')
                 or best_checkpoint['best_validation_prostate'] != best):
             raise ValueError('Resume requires the matching best.pt beside last.pt.')
         torch.save(best_checkpoint, args.output/'best.pt')
@@ -183,12 +186,13 @@ def run_fit(args, train_data, device, model, config):
                 total_slices += len(indices)
         training_peak = torch.cuda.max_memory_allocated()/2**20 if device.type == 'cuda' else None
         print(f'Epoch {epoch}: validation on {len(validation)} complete scans', flush=True)
-        validation_report = evaluate_cases(model, validation, device, args.batch_size)
+        validation_report = evaluate_cases(model, validation, device, args.batch_size, loss_kind=args.loss)
         score = validation_report['patient_macro_dice'][5]
         if score is None:
             raise ValueError('No evaluable validation prostate cases.')
         entry = {'epoch': epoch, 'train_loss': total_loss/total_slices,
-                 'validation_loss': validation_report['mean_soft_dice_loss'],
+                 'validation_loss': validation_report['mean_objective_loss'],
+                 'validation_soft_dice_loss': validation_report['mean_soft_dice_loss'],
                  'prostate_dice': score, 'peak_training_allocated_mib': training_peak,
                  'sampled_slices': total_slices, 'sampled_prostate_slices': prostate_slices,
                  'epoch_seconds': time.perf_counter()-epoch_start}
@@ -202,7 +206,7 @@ def run_fit(args, train_data, device, model, config):
             save_checkpoint(args.output/'best.pt', model, config, **extra)
         save_json(args.output/'history.json', history)
         save_json(args.output/'validation_latest.json', validation_report)
-        plot_history(history, args.output/'curves.png', 'fit')
+        plot_history(history, args.output/'curves.png', 'fit', args.loss)
         print(f'Epoch {epoch}: train_loss={entry["train_loss"]:.6f}, '
               f'validation patient-macro prostate Dice={score:.6f}, '
               f'sampled prostate slices={prostate_slices}/{total_slices}, '
@@ -228,6 +232,8 @@ def main(argv=None):
     parser.add_argument('--epochs', type=int, default=30)
     parser.add_argument('--debug-steps', type=int, default=100)
     parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--loss', choices=['soft-dice', 'dice-ce'], default='soft-dice',
+                        help='Objective; changing it requires a separate experiment, not resume.')
     parser.add_argument('--slice-sampling', choices=['all', 'prostate-balanced'], default='all',
                         help='Fit only: training slice composition; validation/test stay unchanged.')
     parser.add_argument('--resume', type=Path, help='Resume a fit-mode last.pt, in a new output directory.')
@@ -256,7 +262,9 @@ def main(argv=None):
               'learning_rate': args.learning_rate, 'manifest_sha256': file_sha256(args.manifest),
               'slice_sampling': args.slice_sampling,
               'normalization': 'per-volume population z-score before resize',
-              'loss': 'equal six-class soft Dice including background',
+              'loss_kind': args.loss,
+              'loss': ('equal six-class soft Dice including background' if args.loss == 'soft-dice'
+                       else 'equal six-class soft Dice including background + mean pixel cross-entropy'),
               'source_sha256': {name: file_sha256(Path(__file__).with_name(name))
                                 for name in ['modules.py', 'dataset.py', 'train.py', 'experiment.py']},
               'python': platform.python_version(), 'torch': str(torch.__version__),
@@ -272,17 +280,20 @@ def main(argv=None):
             raise ValueError('Test requires a fit checkpoint and the exact same saved manifest.')
         # The evaluation grid/model come from weights, not unused CLI defaults.
         config.update(shape_dhw=old['shape_dhw'], base_channels=old['base_channels'],
+                      loss_kind=old.get('loss_kind', 'soft-dice'), loss=old['loss'],
                       checkpoint_sha256=file_sha256(args.checkpoint), training_config=old)
         save_json(args.output/'config.json', config)
         test_data = HipMRIVolumeDataset(args.manifest, 'test', args.data_root, tuple(old['shape_dhw']))
-        report = evaluate_cases(model, test_data, device, args.batch_size)
+        report = evaluate_cases(model, test_data, device, args.batch_size,
+                                loss_kind=old.get('loss_kind', 'soft-dice'))
         report['checkpoint_sha256'] = file_sha256(args.checkpoint)
         save_json(args.output/'test_metrics.json', report)
         print('FINAL_TEST_COMPLETED; do not tune settings from these results.')
         return 0
     model = UNet2D(base_channels=args.base_channels).to(device)
     dataset = HipMRIVolumeDataset(args.manifest, 'train', args.data_root, tuple(args.shape))
-    print(f'Mode={args.mode}, device={device}, parameters={sum(p.numel() for p in model.parameters())}', flush=True)
+    print(f'Mode={args.mode}, device={device}, parameters={sum(p.numel() for p in model.parameters())}, '
+          f'loss={args.loss}', flush=True)
     return run_debug(args, dataset, device, model, config) if args.mode == 'debug' else run_fit(args, dataset, device, model, config)
 
 
