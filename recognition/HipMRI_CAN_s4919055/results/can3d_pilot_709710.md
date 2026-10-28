@@ -49,6 +49,13 @@ recipe, not a controlled final resource benchmark. Epoch times include
 validation/loading; the separate 0.05695-second repeated-case GPU smoke step
 must not be substituted for an epoch time.
 
+A parity check found the C032 preview and fit-time validation have identical
+prostate metrics, but predicted counts for codes 0..5 differ by
+`[5,-8,2,0,1,0]`. The preview counts above belong to its own exported mask.
+Independent prediction now applies the same seed/deterministic helper as
+fit/validation. GPU confirmation of that alignment is pending; the cause of
+the small differences is not proven, and no checkpoint weights were changed.
+
 The 2D baseline's selected epoch-7 validation Dice is 0.694518. The two models
 have different update budgets, augmentation and sampling: the old 2D model
 used balanced slices with no flips. The current results do not prove that

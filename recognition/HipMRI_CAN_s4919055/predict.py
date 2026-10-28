@@ -17,7 +17,7 @@ import torch
 from dataset import DEFAULT_DATA_ROOT, HipMRIVolumeDataset, LABEL_NAMES
 from modules import CAN3D
 from experiment import (get_device, load_checkpoint, file_sha256, predict_volume,
-                        hard_overlap, aggregate_cases, save_json)
+                        hard_overlap, aggregate_cases, save_json, seed_everything)
 
 
 def save_panels(sample, prediction, output):
@@ -73,6 +73,9 @@ def main(argv=None):
     device = get_device(args.device)
     model, checkpoint = load_checkpoint(args.checkpoint, device)
     config = checkpoint['config']
+    # Match the deterministic convolution settings used in fit/validation.
+    # Preview processes otherwise start with PyTorch's default CUDA policy.
+    seed_everything(config['seed'])
     if file_sha256(args.manifest) != config['manifest_sha256']:
         raise ValueError('Use the exact saved split used to train this checkpoint.')
     if config['mode'] == 'debug' and args.split != 'train':
