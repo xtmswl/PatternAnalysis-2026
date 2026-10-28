@@ -5,6 +5,7 @@ The report's validation values are summarized in validation_summary.csv, and the
 - 703884: inspected downloaded config/history/latest validation; 25 completed epochs, then TIMEOUT from student-supplied scheduler/error output.
 - 704488: inspected downloaded config/history/latest validation; 3 epochs, same fixed validation cases and manifest hash.
 - 708618: inspected downloaded config/history/latest validation; matched three-epoch Dice+CE pilot. All four source hashes and fixed B/D settings checked; patient-macro scores independently recomputed.
+- 709556: CAN3D five-step training-only feasibility result from a supplied terminal screenshot, no displayed errors; raw smoke JSON pending collection with the first full-dataset trial. No accuracy/epoch-time claim.
 - 709041: independently checked downloaded source/manifest/history/latest epoch-8 validation and best-checkpoint previews; epochs1-3 exactly retain708618 history.
 - 709282: fixed epoch-7 checkpoint provenance and full48-case metrics verified; independent patient aggregation and three distinct-patient panels inspected.
 - 708234: epochs4-8 and completion/error status from student terminal screenshots; detailed JSON pending. Blank validation-loss CSV fields mean not supplied, not zero.

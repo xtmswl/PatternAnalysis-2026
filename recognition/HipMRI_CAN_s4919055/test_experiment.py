@@ -173,6 +173,53 @@ class DriverTests(unittest.TestCase):
         self.assertEqual(self.quiet(train_main, args+['--resume', str(out/'last.pt'),
             '--epochs', '2', '--output', str(self.root/'balanced-resume')]), 0)
 
+    def test_can3d_volume_fit_resume_prediction_and_checkpoint_selected_test(self):
+        self.remove_split_files('test')
+        out, resumed = self.root/'can3d', self.root/'can3d-resumed'
+        args = self.common+['--model','can3d','--mode','fit','--shape','4','16','16',
+                            '--batch-size','1','--loss','dice-ce','--flip-probability','.5']
+        self.assertEqual(self.quiet(train_main,args+['--epochs','1','--output',str(out)]),0)
+        config = json.loads((out/'config.json').read_text())
+        history = json.loads((out/'history.json').read_text())
+        self.assertEqual(config['model'],'can3d')
+        self.assertIsNone(config['base_channels'])
+        self.assertEqual(config['flip_probability'],.5)
+        self.assertEqual(history[0]['training_volumes'],1)
+        self.assertNotIn('sampled_slices',history[0])
+        with self.assertRaisesRegex(ValueError,'augmentation'):
+            wrong = args.copy(); wrong[wrong.index('--flip-probability')+1]='0'
+            self.quiet(train_main,wrong+['--epochs','2','--resume',str(out/'last.pt'),
+                                       '--output',str(self.root/'wrong-flips')])
+        self.assertEqual(self.quiet(train_main,args+['--epochs','2','--resume',str(out/'last.pt'),
+                                                   '--output',str(resumed)]),0)
+        uninterrupted=self.root/'can3d-uninterrupted'
+        self.assertEqual(self.quiet(train_main,args+['--epochs','2','--output',str(uninterrupted)]),0)
+        first_state=torch.load(resumed/'last.pt',weights_only=True)['model_state']
+        second_state=torch.load(uninterrupted/'last.pt',weights_only=True)['model_state']
+        for key in first_state:
+            torch.testing.assert_close(first_state[key],second_state[key],rtol=0,atol=0)
+        preview = self.root/'can3d-preview'
+        self.assertEqual(self.quiet(predict_main,self.common+['--checkpoint',str(resumed/'best.pt'),
+                                   '--output',str(preview)]),0)
+        metrics=json.loads((preview/'preview_metrics.json').read_text())
+        self.assertEqual(metrics['model'],'can3d')
+        self.assertIsNone(metrics['slice_batch_size'])
+        self.assertEqual(metrics['volume_batch_size'],1)
+        saved=nib.load(next(preview.glob('*_prediction_RAS.nii.gz')))
+        self.assertEqual(saved.shape,(16,16,4))
+        # Explicit synthetic held-out evaluation must use checkpoint architecture,
+        # even when the CLI architecture is left at its old U-Net default.
+        for scan in self.manifest['splits']['test']['scans']:
+            self.write_case(scan['case_id'])
+        test_out=self.root/'can3d-test'
+        self.assertEqual(self.quiet(train_main,self.common+['--mode','test','--final-test',
+            '--checkpoint',str(resumed/'best.pt'),'--output',str(test_out)]),0)
+        self.assertEqual(json.loads((test_out/'config.json').read_text())['model'],'can3d')
+        test_config=json.loads((test_out/'config.json').read_text())
+        self.assertEqual(test_config['architecture_variant'],'methods_text_one_down_8_36_48')
+        self.assertEqual(test_config['batch_size'],1)
+        self.assertIn('can3d.py',test_config['source_sha256'])
+
     def test_dice_ce_objective_reporting_resume_and_checkpoint_evaluation(self):
         self.remove_split_files('test')
         out = self.root/'dice-ce'

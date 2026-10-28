@@ -3,11 +3,13 @@
 Architecture basis: Ronneberger et al. (2015), arXiv:1505.04597, Fig. 1.
 Adaptations: padded convolutions retain resolution; initial width 16 instead
 of 64 for a controlled pilot. No pretrained weights or extra encoder.
-The Hard CAN3D main model is not implemented in this milestone.
+The one-downsampling CAN3D adaptation is implemented in can3d.py and
+re-exported here so both architectures have one public module entry point.
 """
 
 import torch
 from torch import nn
+from can3d import CAN3D
 
 
 class DoubleConv2D(nn.Module):

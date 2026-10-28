@@ -2,7 +2,7 @@
 
 Xiaotian Mao | s4919055 | COMP3710, Semester 2, 2026
 
-**Working report draft - completed work through 28 October 2026.** The implemented model is a 2D U-Net. A CAN3D adaptation now has a local forward/backward-tested prototype; its real GPU feasibility check and full training are pending. All reported segmentation scores below are training diagnostics or validation results; no final test results or 2D-versus-3D performance claims are available.
+**Working report draft - completed work through 28 October 2026.** The implemented model is a 2D U-Net. A CAN3D adaptation now has a local forward/backward-tested prototype; its GPU feasibility check passed, and full training/validation drivers are integrated and synthetic-tested. The first real three-epoch trial is prepared; trained CAN3D scores are pending. All reported segmentation scores below are training diagnostics or validation results; no final test results or 2D-versus-3D performance claims are available.
 
 **Latest verified result:** the 2D U-Net best checkpoint is epoch 7, with full-validation patient-macro prostate Dice **0.6945** and IoU **0.5356**, independently rechecked in job 709282. These are validation results, not final test scores.
 
@@ -81,7 +81,11 @@ If both prediction and truth are empty, that class is recorded as missing and ex
 
 The paper's Figure 2 instead illustrates a two-downsampling variant with 3/6/36/48 channels. Our smaller resized input uses the one-downsampling option described in the methods, not an exact reproduction of that diagram. The 8-channel shortcut/upsampling output, transposed-convolution padding, initial normalization weights (a=1,b=0) and non-affine instance normalization are explicit implementation choices. Outputs are raw logits because the loss handles softmax internally.
 
-The initial planned recipe uses the same saved patient split, preprocessing, Adam learning rate 0.001 and unit-weight Dice+CE ingredients as the successful baseline, but processes one whole resized volume per update. It does not reproduce the paper's specialized DSF objective, scheduler or augmentation. These differences and the different update counts must remain visible in the final comparison. Three local tests passed for initialization, normalization, full-volume shapes, finite gradients and an actual optimizer update; this does not establish GPU memory, epoch duration or accuracy. The prepared `can3d_smoke.slurm` measures five steps on one training volume (two warmup, three measured); validation and test data are not opened. Full training/inference integration remains pending.
+The initial planned recipe uses the same saved patient split, preprocessing, Adam learning rate 0.001 and unit-weight Dice+CE ingredients as the successful baseline, but processes one whole resized volume per update. It does not reproduce the paper's specialized DSF objective, scheduler or augmentation. These differences and the different update counts must remain visible in the final comparison. Three architecture tests passed for initialization, normalization, full-volume shapes, finite gradients and an optimizer update. The shared `train.py` and `predict.py` now support whole-volume CAN3D checkpoints. A further synthetic integration test covers fitting with training-only paired left/right torch.flip (probability 0.5), exact resumption versus uninterrupted fitting, validation, prediction-grid export and explicit test gating. This does not constitute a real-data accuracy measurement.
+
+GPU smoke job 709556 completed five steps on one repeated training volume (two warmup, three measured), reporting peak allocated memory 909.998 MiB and median measured step time 0.05695 s; stdout showed CAN3D_SMOKE_PASSED and displayed stderr was empty. These values currently come from the student's terminal screenshot; the detailed smoke JSON will be collected with the next trial. The timing excludes file loading and does not measure a full epoch, convergence or a controlled 2D/3D benchmark.
+
+The prepared `can3d_pilot.slurm` trains three epochs on all 136 training volumes and validates on all 48 validation scans each epoch, preserving best/last checkpoints and Adam state in a new output directory. It uses batch size 1, Adam 0.001, seed 42 and Dice+CE. Training-only paired left/right flips have probability 0.5; the old baseline used no flips, balanced slice sampling and more updates per epoch. These are different training recipes, so any performance difference cannot be attributed solely to 3D context without a matched control. Validation/test preprocessing and patient assignments remain the same. The 30-minute allocation is a cap, not an estimated training time. Real trial results are pending.
 
 ## 4. Experiments completed so far
 
@@ -99,7 +103,7 @@ Run A visits every training slice once each epoch. Runs B/C use all 136 training
 
 These experiments investigate training failure, rather than provide a final controlled model comparison. Run A has 25 epochs and the fully downloaded B report has 3; their different budgets and sampled training distributions limit causal conclusions. Run C preserves B's training recipe and adds five epochs. Its numbers here come from the student's terminal output; its detailed JSON report has not yet been downloaded.
 
-Runs B and D provide a matched three-epoch objective comparison. Both use the same architecture, initial seed, input shape, fixed split, balanced sampling, batch size and Adam learning rate. D adds mean per-pixel categorical cross-entropy to soft Dice, with coefficient 1 for each. Both ingredients are covered in Contact 6/7; their sum is a project adaptation. The architecture and original Dice code were checked to be unchanged, and D's recorded source hashes match the local code. Both devices are A100-PCIE-40GB GPUs, on different nodes. This is a single-seed pilot comparison, not a statistical guarantee across runs.
+Runs B and D provide a matched three-epoch objective comparison. Both use the same architecture, initial seed, input shape, fixed split, balanced sampling, batch size and Adam learning rate. D adds mean per-pixel categorical cross-entropy to soft Dice, with coefficient 1 for each. Both ingredients are covered in Contact 6/7; their sum is a project adaptation. The architecture and original Dice code were checked to be unchanged, and D's recorded source hashes were verified against the preserved baseline code (commit 50e8ee7); later CAN3D driver integration is a separate code change. Both devices are A100-PCIE-40GB GPUs, on different nodes. This is a single-seed pilot comparison, not a statistical guarantee across runs.
 
 ![Figure 2. Left: Dice-only training curves A/B/C. Right: prostate validation Dice including D. A/B/D use downloaded JSON; C uses terminal output. Losses across sampling distributions or objectives should not be directly compared.](figures/learning_curves.png)
 
@@ -171,7 +175,7 @@ The three-case inspection supports retaining patient-specific boundary analysis 
 | Peak training allocation | A/B: 167.34 MiB; D: 166.71 MiB | PyTorch allocation; excludes driver/context and other device memory; small differences do not establish a memory advantage |
 | A100 complete-case preview | 0.2223 s (debug); 0.2216 / 0.2264 s (best model) | Individual training/validation previews; no disk/plot time; not repeated benchmark |
 | CPU complete-case previews | 2.6096 / 1.7711 s | Two diagnostic cases, run 704533; different device/checkpoint |
-| CAN3D resources | 170,342 parameters; real GPU allocation/time pending | Local one-downsampling prototype; no trained-model measurements |
+| CAN3D diagnostic | 170,342 parameters; 910.00 MiB; median 0.05695 s/step | Five repeated training-case steps, 709556 screenshot; excludes loading, not a full-epoch or controlled model benchmark |
 
 The A100 observations were obtained on an NVIDIA A100-PCIE-40GB. These are descriptive diagnostic measurements. They do not constitute repeated, controlled latency measurements or comparable 2D/3D resource profiling. The tiny CUDA check's 0.174 MiB allocation is excluded because it did not run the U-Net. CPU preview times must not be compared directly with A100 timings to claim a model advantage.
 
@@ -179,7 +183,7 @@ The A100 observations were obtained on an NVIDIA A100-PCIE-40GB. These are descr
 
 **Do not deploy the current prototype for automatic prostate contour drafting.** Dice+CE has recovered prostate predictions and is a promising baseline recipe, but best mean validation Dice 0.6945 on six groups is not sufficient evidence for reliable contours. Its boundaries, error cases and fixed-model test performance still need examination. Retain the verified data pipeline and failed-run evidence, retain the inspected error examples and compare the selected baseline with the planned 3D model. Any later usable prototype would still require specialist review.
 
-There is currently no evidence that CAN3D improves accuracy or efficiency, because its local prototype has not been trained or evaluated on real data. A final recommendation between 2D and 3D must wait for both trained models, the same fixed test split, comparable resource measurements and sufficient failure-case analysis. The selected Hard route and target Dice are not achieved by selecting the model name or by passing a GPU smoke test.
+There is currently no evidence that CAN3D improves accuracy or efficiency, because its real full-dataset trial has not yet produced validation or test scores; the five-step feasibility diagnostic cannot establish accuracy. A final recommendation between 2D and 3D must wait for both trained models, the same fixed test split, comparable resource measurements and sufficient failure-case analysis. The selected Hard route and target Dice are not achieved by selecting the model name or by passing a GPU smoke test.
 
 ## 6. Implementation, reproducibility and verification
 
@@ -188,9 +192,9 @@ There is currently no evidence that CAN3D improves accuracy or efficiency, becau
 | File | Implemented responsibility |
 |---|---|
 | modules.py | 2D U-Net, soft Dice and optional Dice+CE objective; PyTorch only |
-| can3d.py / can3d_smoke.py | Local CAN3D adaptation and a training-only GPU feasibility diagnostic |
+| can3d.py / can3d_smoke.py | CAN3D adaptation and a training-only GPU feasibility diagnostic |
 | dataset.py | Inventory, patient split, integrity checks, aligned preparation and slice conversion |
-| train.py | Debug/fit/validation, checkpoint selection/resumption and guarded final-test driver |
+| train.py | 2D slice or 3D whole-volume fit/validation, checkpoint/resume, paired training flips and guarded final-test driver |
 | predict.py | Reload weights, predict complete cases and save masks/error panels |
 | experiment.py | Reproducibility helpers, hard metrics, case/patient aggregation and plotting |
 | validate_best.py | Fixed-checkpoint validation recheck and distinct-patient low-score panels |
@@ -202,7 +206,7 @@ Small aggregate evidence accompanies this report in [validation_summary.csv](res
 
 The downloaded A/B configurations record Python 3.11.16, PyTorch 2.14.0+cu130, CUDA package 13.0, NumPy 2.4.6 and NiBabel 5.4.2. The setup output recorded Matplotlib 3.11.2; that package's version was not serialized in those run configurations. This distinction should be retained when reproducing the older runs.
 
-The fixed manifest SHA256 is `47a19c81dee93d9ddd2a920b86572bf57db240cc8a968ea731305d54a181d25e`. Each run records source hashes, model/input settings, seed, device, host and Slurm job ID. New output directories refuse overwrite, and manifests are checked for identity consistency and cross-split overlap. Runs A/B/D match the inspected manifest; A's original source hashes and D's current source hashes were independently checked. D's patient-macro metrics were independently recomputed from the case records. Later code changes are recorded in progressive commits. Bitwise reproducibility across different hardware or library versions is not assumed.
+The fixed manifest SHA256 is `47a19c81dee93d9ddd2a920b86572bf57db240cc8a968ea731305d54a181d25e`. Each run records source hashes, model/input settings, seed, device, host and Slurm job ID. New output directories refuse overwrite, and manifests are checked for identity consistency and cross-split overlap. Runs A/B/D match the inspected manifest; A's original source hashes and D's original source hashes were independently checked against the preserved baseline revision, before CAN3D integration. D's patient-macro metrics were independently recomputed from the case records. Later code changes are recorded in progressive commits. Bitwise reproducibility across different hardware or library versions is not assumed.
 
 ### 6.3 Example usage
 
@@ -235,13 +239,13 @@ The output contains a prediction NIfTI on the resized RAS grid, a prostate input
 
 ### 6.4 Code verification and its limits
 
-Twenty-four core local tests passed, using temporary synthetic fixtures. Two additional validation-driver tests passed: actual checkpoint reevaluation with test files removed, plus hash/overwrite safeguards and different-patient case selection. They cover coordinate/grid consistency, variable-depth handling, invalid labels/intensities, split leakage, one-hot targets, known-answer Dice/IoU, patient aggregation, finite gradients, actual small optimization runs, checkpoint reload/resumption, balanced batches, loss arithmetic and guarded test access. The test command is:
+All thirty local tests passed using temporary synthetic fixtures, including the original 2D regression checks, two fixed-validation-driver checks, three CAN3D architecture checks and a CAN3D training/resumption/prediction integration check. They cover coordinate/grid consistency, variable-depth handling, invalid labels/intensities, split leakage, one-hot targets, known-answer Dice/IoU, patient aggregation, finite gradients, actual small optimization runs, checkpoint reload/resumption, balanced batches, loss arithmetic and guarded test access. The test command is:
 
 ```bash
 python -m unittest -v test_dataset test_modules test_experiment test_validate_best test_can3d
 ```
 
-Three additional CAN3D prototype tests passed; their synthetic evidence is limited to the architecture and optimizer behavior, not real-data feasibility.
+The CAN3D integration check also matched all resumed model tensors exactly against uninterrupted fitting with the same epoch-specific flip seeds. Synthetic test outputs are not real clinical accuracy evidence.
 
 Separately, real evidence includes the full 211-pair audit, a three-case prepared-data check, an A100 CUDA check, GPU debug/fit runs and the downloaded case previews. Passing software tests verifies those checked behaviours, not segmentation quality. The student's ability to explain the code is distinct from generated tests or tutor explanations.
 
@@ -250,7 +254,7 @@ Separately, real evidence includes the full 211-pair audit, a three-case prepare
 The current evidence is limited by a small validation cohort, filename-based identity grouping, downsampled anatomy, single-seed trials and a small, deliberately selected set of inspected error cases. A/B have unequal budgets; B/D have a matched three-epoch budget but no repeat-seed uncertainty estimate. Dice+CE improves validation overlap, but the main final-test objective remains unverified. The following results are intentionally not invented in this draft:
 
 - Controlled profiling of the selected baseline, and assessment of any later changed model on fresh error examples.
-- Full CAN3D training/inference integration, real GPU feasibility and a trained CAN3D model.
+- Real full-dataset CAN3D trial/validation results and a trained-model comparison; integration and the initial GPU feasibility diagnostic are complete.
 - Frozen-model test Dice/IoU and a direct 2D-versus-3D comparison.
 - Controlled full-model resource profiling and final 2D/3D failure-case comparison; the current three baseline validation cases are preliminary evidence.
 

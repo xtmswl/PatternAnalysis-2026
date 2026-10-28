@@ -15,6 +15,7 @@ import numpy as np
 import torch
 
 from dataset import DEFAULT_DATA_ROOT, HipMRIVolumeDataset, LABEL_NAMES
+from modules import CAN3D
 from experiment import (get_device, load_checkpoint, file_sha256, predict_volume,
                         hard_overlap, aggregate_cases, save_json)
 
@@ -86,7 +87,9 @@ def main(argv=None):
         if device.type == 'cuda':
             # Warm up one batch before timing the complete case.
             with torch.no_grad():
-                model(sample['image'].permute(1, 0, 2, 3)[:args.batch_size].to(device))
+                warm_input = (sample['image'][None] if isinstance(model, CAN3D) else
+                              sample['image'].permute(1, 0, 2, 3)[:args.batch_size])
+                model(warm_input.to(device))
             torch.cuda.synchronize()
             torch.cuda.reset_peak_memory_stats()
         start = time.perf_counter()
@@ -107,11 +110,13 @@ def main(argv=None):
         print(f'{sample["case_id"]}: prostate Dice={result["dice"][5]}, seconds/full case={seconds:.4f}', flush=True)
     report = aggregate_cases(cases)
     report.update(cases=cases, label_names=LABEL_NAMES, split=args.split,
+                  model=config['model'], checkpoint_epoch=checkpoint.get('epoch'),
                   preview_subset=True, debug_checkpoint=config['mode'] == 'debug',
                   checkpoint_sha256=file_sha256(args.checkpoint),
                   manifest_sha256=file_sha256(args.manifest),
                   shape_dhw=config['shape_dhw'], base_channels=config['base_channels'],
-                  slice_batch_size=args.batch_size, device=str(device),
+                  slice_batch_size=args.batch_size if config['model'] == 'unet2d' else None,
+                  volume_batch_size=1 if config['model'] == 'can3d' else None, device=str(device),
                   gpu_name=torch.cuda.get_device_name() if device.type == 'cuda' else None,
                   torch_version=str(torch.__version__), nibabel_version=nib.__version__,
                   parameter_count=sum(p.numel() for p in model.parameters()),

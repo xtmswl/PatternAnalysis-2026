@@ -15,7 +15,7 @@ import time
 import torch
 
 from dataset import LABEL_NAMES, volume_to_slices
-from modules import UNet2D, SoftDiceLoss, segmentation_loss
+from modules import CAN3D, UNet2D, SoftDiceLoss, segmentation_loss
 
 
 def seed_everything(seed):
@@ -57,9 +57,12 @@ def save_checkpoint(path, model, config, **extra):
 def load_checkpoint(path, device):
     checkpoint = torch.load(path, map_location='cpu', weights_only=True)
     config = checkpoint['config']
-    if config['model'] != 'unet2d':
-        raise ValueError('This baseline driver currently supports unet2d only.')
-    model = UNet2D(base_channels=config['base_channels']).to(device)
+    if config['model'] == 'unet2d':
+        model = UNet2D(base_channels=config['base_channels']).to(device)
+    elif config['model'] == 'can3d':
+        model = CAN3D().to(device)
+    else:
+        raise ValueError('Unknown checkpoint architecture.')
     model.load_state_dict(checkpoint['model_state'], strict=True)
     model.eval()
     return model, checkpoint
@@ -109,10 +112,13 @@ def aggregate_cases(cases):
 
 @torch.no_grad()
 def predict_volume(model, image, device, batch_size=8):
-    """Slice inference reassembled to six logits x D x H x W, on CPU."""
+    """Six logits x D x H x W on CPU: reassembled 2D slices or one 3D volume."""
     if batch_size < 1:
         raise ValueError('batch_size must be positive.')
     model.eval()
+    if isinstance(model, CAN3D):
+        # One whole volume: no slicing or patch stitching for CAN3D.
+        return model(image[None].to(device))[0].cpu()
     slices = image.permute(1, 0, 2, 3)
     outputs = []
     for first in range(0, len(slices), batch_size):

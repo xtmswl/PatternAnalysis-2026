@@ -1,9 +1,9 @@
-"""Readable course-style Adam training for the 2D U-Net baseline.
+"""Readable course-style Adam training for 2D U-Net and whole-volume CAN3D.
 
 debug: repeatedly fit a few slices from one training volume; never open
 validation/test images. fit: all training cases, validation selects best.pt.
 test: explicitly evaluate a fixed fit checkpoint on the held-out test split.
-CAN3D training will be added after its architecture is verified.
+CAN3D uses one complete volume per update; 2D uses slice mini-batches.
 """
 
 import argparse
@@ -20,7 +20,7 @@ import torch
 
 from dataset import (DEFAULT_DATA_ROOT, PILOT_SHAPE_DHW, HipMRIVolumeDataset,
                      read_patient_manifest, volume_to_slices)
-from modules import UNet2D, segmentation_loss
+from modules import CAN3D, UNet2D, segmentation_loss
 from experiment import (seed_everything, get_device, file_sha256, save_json,
                         save_checkpoint, load_checkpoint, hard_overlap,
                         evaluate_cases, plot_history)
@@ -151,6 +151,11 @@ def run_fit(args, train_data, device, model, config):
             raise ValueError('Resume cannot change slice sampling; start a separate experiment.')
         if config['loss_kind'] != old.get('loss_kind', 'soft-dice'):
             raise ValueError('Resume cannot change loss; start a separate experiment.')
+        if config['flip_probability'] != old.get('flip_probability', 0.):
+            raise ValueError('Resume cannot change augmentation; start a separate experiment.')
+        if (args.model == 'can3d' and config['source_sha256']['can3d.py']
+                != old['source_sha256']['can3d.py']):
+            raise ValueError('Resume cannot silently change the CAN3D architecture source.')
         model.load_state_dict(checkpoint['model_state'])
         optimizer.load_state_dict(checkpoint['optimizer_state'])
         best, history = checkpoint['best_validation_prostate'], checkpoint['history']
@@ -162,19 +167,31 @@ def run_fit(args, train_data, device, model, config):
         if (any(best_checkpoint['config'][key] != old[key] for key in resume_keys)
                 or best_checkpoint['config'].get('slice_sampling', 'all') != old.get('slice_sampling', 'all')
                 or best_checkpoint['config'].get('loss_kind', 'soft-dice') != old.get('loss_kind', 'soft-dice')
+                or best_checkpoint['config'].get('flip_probability', 0.) != old.get('flip_probability', 0.)
+                or (args.model == 'can3d' and best_checkpoint['config']['source_sha256']['can3d.py']
+                    != old['source_sha256']['can3d.py'])
                 or best_checkpoint['best_validation_prostate'] != best):
             raise ValueError('Resume requires the matching best.pt beside last.pt.')
         torch.save(best_checkpoint, args.output/'best.pt')
     for epoch in range(start_epoch, args.epochs+1):
         epoch_start = time.perf_counter()
-        print(f'Epoch {epoch}: training {len(train_data)} cases; '
-              f'slice_sampling={args.slice_sampling}', flush=True)
+        policy = (f'whole-volume batch=1; paired left/right flip probability={args.flip_probability}'
+                  if args.model == 'can3d' else f'slice_sampling={args.slice_sampling}')
+        print(f'Epoch {epoch}: training {len(train_data)} cases; {policy}', flush=True)
+        if args.flip_probability:
+            # A resumed epoch repeats the same training-only flip decisions.
+            seed_everything(args.seed+epoch)
         generator = torch.Generator().manual_seed(args.seed+epoch)
         total_loss, total_slices, prostate_slices = 0., 0, 0
         if device.type == 'cuda':
             torch.cuda.reset_peak_memory_stats()
         for index in torch.randperm(len(train_data), generator=generator).tolist():
             sample = train_data[index]
+            if args.model == 'can3d':
+                image, target = sample['image'][None].to(device), sample['target'][None].to(device)
+                total_loss += optimize_batch(model, optimizer, criterion, image, target)
+                total_slices += 1  # Count complete volumes in the denominator.
+                continue
             images, targets = volume_to_slices(sample['image'], sample['target'])
             order = training_slice_order(sample['mask'], generator, args.slice_sampling)
             prostate_slices += int((sample['mask'][order] == 5).flatten(1).any(1).sum())
@@ -196,6 +213,11 @@ def run_fit(args, train_data, device, model, config):
                  'prostate_dice': score, 'peak_training_allocated_mib': training_peak,
                  'sampled_slices': total_slices, 'sampled_prostate_slices': prostate_slices,
                  'epoch_seconds': time.perf_counter()-epoch_start}
+        if args.model == 'can3d':
+            entry.pop('sampled_slices')
+            entry.pop('sampled_prostate_slices')
+            entry['training_volumes'] = total_slices
+            entry['optimizer_steps'] = total_slices
         history.append(entry)
         improved = score > best
         best = max(best, score)
@@ -207,20 +229,24 @@ def run_fit(args, train_data, device, model, config):
         save_json(args.output/'history.json', history)
         save_json(args.output/'validation_latest.json', validation_report)
         plot_history(history, args.output/'curves.png', 'fit', args.loss)
+        count_text = (f'training volumes={total_slices}' if args.model == 'can3d' else
+                      f'sampled prostate slices={prostate_slices}/{total_slices}')
         print(f'Epoch {epoch}: train_loss={entry["train_loss"]:.6f}, '
               f'validation patient-macro prostate Dice={score:.6f}, '
-              f'sampled prostate slices={prostate_slices}/{total_slices}, '
+              f'{count_text}, '
               f'seconds={entry["epoch_seconds"]:.1f}', flush=True)
         print('Validation predicted voxels by class 0..5: '+str([
             sum(case['predicted_voxels'][c] for case in validation_report['cases'])
             for c in range(6)]), flush=True)
-    print('BASELINE_FIT_COMPLETED; test data have not been evaluated.')
+    marker = 'CAN3D_FIT_COMPLETED' if args.model == 'can3d' else 'BASELINE_FIT_COMPLETED'
+    print(marker+'; test data have not been evaluated.')
     return 0
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--mode', choices=['debug', 'fit', 'test'], default='debug')
+    parser.add_argument('--model', choices=['unet2d', 'can3d'], default='unet2d')
     parser.add_argument('--manifest', type=Path, default=Path('runs/split_seed42.json'))
     parser.add_argument('--data-root', type=Path, default=DEFAULT_DATA_ROOT)
     parser.add_argument('--output', type=Path, required=True, help='New directory; refuses overwrite.')
@@ -232,6 +258,8 @@ def main(argv=None):
     parser.add_argument('--epochs', type=int, default=30)
     parser.add_argument('--debug-steps', type=int, default=100)
     parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--flip-probability', type=float, default=0.,
+                        help='Training-only paired left/right torch.flip; zero preserves original runs.')
     parser.add_argument('--loss', choices=['soft-dice', 'dice-ce'], default='soft-dice',
                         help='Objective; changing it requires a separate experiment, not resume.')
     parser.add_argument('--slice-sampling', choices=['all', 'prostate-balanced'], default='all',
@@ -243,8 +271,16 @@ def main(argv=None):
     if (min(args.batch_size, args.epochs, args.debug_steps, args.base_channels, *args.shape) < 1
             or not math.isfinite(args.learning_rate) or args.learning_rate <= 0):
         parser.error('Sizes, steps and learning rate must be positive.')
-    if any(size % 16 for size in args.shape[1:]):
+    if args.model == 'unet2d' and any(size % 16 for size in args.shape[1:]):
         parser.error('H and W must be multiples of 16 for this U-Net.')
+    if not 0 <= args.flip_probability <= 1 or (args.mode != 'fit' and args.flip_probability != 0):
+        parser.error('Flip augmentation is only allowed in fit mode, with probability 0..1.')
+    if args.model == 'can3d' and args.mode == 'debug':
+        parser.error('Use can3d_smoke.py for the training-only CAN3D diagnostic.')
+    if args.model == 'can3d' and (args.batch_size != 1 or args.slice_sampling != 'all'):
+        parser.error('CAN3D uses batch-size 1 whole volumes, not slice sampling.')
+    if args.model == 'can3d' and any(size < 4 or size % 2 for size in args.shape):
+        parser.error('CAN3D requires even spatial sizes >=4.')
     if args.resume and args.mode != 'fit':
         parser.error('--resume is only for fit mode.')
     if args.mode != 'fit' and args.slice_sampling != 'all':
@@ -257,16 +293,20 @@ def main(argv=None):
     seed_everything(args.seed)
     device = get_device(args.device)
     read_patient_manifest(args.manifest)
-    config = {'model': 'unet2d', 'mode': args.mode, 'base_channels': args.base_channels,
+    config = {'model': args.model, 'mode': args.mode,
+              'architecture_variant': 'methods_text_one_down_8_36_48' if args.model == 'can3d' else 'padded_unet',
+              'base_channels': args.base_channels if args.model == 'unet2d' else None,
               'shape_dhw': list(args.shape), 'seed': args.seed, 'batch_size': args.batch_size,
               'learning_rate': args.learning_rate, 'manifest_sha256': file_sha256(args.manifest),
               'slice_sampling': args.slice_sampling,
+              'flip_probability': args.flip_probability,
               'normalization': 'per-volume population z-score before resize',
               'loss_kind': args.loss,
               'loss': ('equal six-class soft Dice including background' if args.loss == 'soft-dice'
                        else 'equal six-class soft Dice including background + mean pixel cross-entropy'),
               'source_sha256': {name: file_sha256(Path(__file__).with_name(name))
-                                for name in ['modules.py', 'dataset.py', 'train.py', 'experiment.py']},
+                                for name in ['modules.py', 'dataset.py', 'train.py', 'experiment.py']
+                                + (['can3d.py'] if args.model == 'can3d' else [])},
               'python': platform.python_version(), 'torch': str(torch.__version__),
               'nibabel': nibabel.__version__, 'numpy': np.__version__,
               'hostname': socket.gethostname(), 'slurm_job_id': os.environ.get('SLURM_JOB_ID'),
@@ -279,9 +319,13 @@ def main(argv=None):
         if old['mode'] != 'fit' or old['manifest_sha256'] != config['manifest_sha256']:
             raise ValueError('Test requires a fit checkpoint and the exact same saved manifest.')
         # The evaluation grid/model come from weights, not unused CLI defaults.
-        config.update(shape_dhw=old['shape_dhw'], base_channels=old['base_channels'],
+        config.update(model=old['model'], shape_dhw=old['shape_dhw'], base_channels=old['base_channels'],
+                      architecture_variant=old.get('architecture_variant','padded_unet'),
+                      batch_size=1 if old['model'] == 'can3d' else args.batch_size,
                       loss_kind=old.get('loss_kind', 'soft-dice'), loss=old['loss'],
                       checkpoint_sha256=file_sha256(args.checkpoint), training_config=old)
+        if old['model'] == 'can3d':
+            config['source_sha256']['can3d.py'] = file_sha256(Path(__file__).with_name('can3d.py'))
         save_json(args.output/'config.json', config)
         test_data = HipMRIVolumeDataset(args.manifest, 'test', args.data_root, tuple(old['shape_dhw']))
         report = evaluate_cases(model, test_data, device, args.batch_size,
@@ -290,8 +334,9 @@ def main(argv=None):
         save_json(args.output/'test_metrics.json', report)
         print('FINAL_TEST_COMPLETED; do not tune settings from these results.')
         return 0
-    model = UNet2D(base_channels=args.base_channels).to(device)
-    dataset = HipMRIVolumeDataset(args.manifest, 'train', args.data_root, tuple(args.shape))
+    model = (CAN3D() if args.model == 'can3d' else UNet2D(base_channels=args.base_channels)).to(device)
+    dataset = HipMRIVolumeDataset(args.manifest, 'train', args.data_root, tuple(args.shape),
+                                 flip_probability=args.flip_probability)
     print(f'Mode={args.mode}, device={device}, parameters={sum(p.numel() for p in model.parameters())}, '
           f'loss={args.loss}', flush=True)
     return run_debug(args, dataset, device, model, config) if args.mode == 'debug' else run_fit(args, dataset, device, model, config)
