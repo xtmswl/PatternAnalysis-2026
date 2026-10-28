@@ -15,3 +15,6 @@ The report's validation values are summarized in validation_summary.csv, and the
 Raw manifests, reports, MRI volumes and model weights are not copied into this results folder. The figures are report visuals, not a redistributed training dataset. No final test results are available. The original check-off preparation content is archived separately and not rewritten as later progress.
 
 - 709710: downloaded current source hashes, fixed split, all class metrics and two PNG/NIfTI previews independently verified; raw709556smoke JSON also checked. Details: [CAN3D pilot](can3d_pilot_709710.md).
+
+- 709852: all five training-source hashes and exact48-case split verified; eight-epoch history and best epoch-7 full-validation class metrics independently reaggregated; three distinct-patient panels inspected. C032 independent preview agrees for all six classes. See [continuation evidence](can3d_resume_709852.md).
+- Frozen final evaluation plan: both epoch-7 checkpoint hashes and the original27-scan/six-group test cohort are declared before testing. Final GPU/test results remain pending.

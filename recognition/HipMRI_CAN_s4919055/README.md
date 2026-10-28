@@ -2,15 +2,15 @@
 
 Xiaotian Mao | s4919055 | COMP3710, Semester 2, 2026
 
-**Working report draft - completed work through 28 October 2026.** The implemented model is a 2D U-Net. A CAN3D adaptation now has a local forward/backward-tested prototype; its GPU feasibility check passed, and full training/validation drivers are integrated and synthetic-tested. The first real three-epoch CAN3D trial completed with prostate validation Dice 0.6744; further training and final testing remain pending. All reported segmentation scores below are training diagnostics or validation results; no final test results or 2D-versus-3D performance claims are available.
+**Working report draft — completed work through 29 October 2026.** Both the 2D U-Net and CAN3D adaptation have completed eight-epoch training runs. Their validation-selected best weights are both from epoch 7 and have been independently rechecked. Final held-out testing, controlled inference profiling and the final manager recommendation remain pending.
 
-**Latest verified result:** the 2D U-Net best checkpoint is epoch 7, with full-validation patient-macro prostate Dice **0.6945** and IoU **0.5356**, independently rechecked in job 709282. These are validation results, not final test scores.
+**Latest verified validation results:** prostate patient-macro Dice/IoU are **0.6945/0.5356** for 2D U-Net and **0.7193/0.5709** for CAN3D. These are validation scores; the test target has not yet been established. See the [verified CAN3D continuation and failure panels](results/can3d_resume_709852.md).
 
 ## 1. Problem and research question
 
 This project investigates automatic organ segmentation in pelvic MRI, with prostate segmentation as the main outcome. The intended prototype would draft contours for an imaging specialist to review. Missing a small organ can make a high average score misleading, so the investigation considers each anatomical class and visible failure cases rather than background accuracy alone.
 
-The planned comparison asks whether CAN3D's volumetric context improves prostate boundaries and continuity enough to justify its memory and inference cost compared with a standard 2D U-Net. The completed work establishes the data pipeline, implements the baseline and investigates why early training misses small organs. It does not yet answer the 3D comparison question. The planned acceptance criteria are preserved in Appendix A; they are targets, not achieved results.
+The planned comparison asks whether CAN3D's volumetric context improves prostate boundaries and continuity enough to justify its memory and inference cost compared with a standard 2D U-Net. The completed work establishes the data pipeline, trains both models and investigates small-organ failures. The final test and controlled cost comparison are still needed to answer the deployment question. The planned acceptance criteria are preserved in Appendix A; they are targets, not achieved results.
 
 ## 2. Dataset and preprocessing
 
@@ -54,7 +54,7 @@ The complete field of view is resized to 64 x 128 x 128 voxels. MRI intensities 
 
 The implemented network follows the encoder-decoder and concatenated skip-connection design of U-Net [1]. Four encoder levels extract features using two padded 3 x 3 convolutions with ReLU, followed by 2 x 2 pooling. A bottleneck is followed by four decoder levels using transposed convolutions, concatenated encoder features and two convolutions. A 1 x 1 output convolution produces six raw class logits per pixel.
 
-The initial channel width is 16, giving encoder/bottleneck widths 16,32,64,128,256. This reduces the original paper's channel count. Padded convolutions preserve dimensions rather than reproduce the original valid-convolution cropping. The network has **1,940,902 trainable parameters** and uses no pretrained weights. Each 3D case is processed slice by slice; all predictions are reassembled before case-level evaluation. The local CAN3D prototype is described in Section 3.4. The first trained CAN3D pilot has validation results in the linked supplement, but no final test result.
+The initial channel width is 16, giving encoder/bottleneck widths 16,32,64,128,256. This reduces the original paper's channel count. Padded convolutions preserve dimensions rather than reproduce the original valid-convolution cropping. The network has **1,940,902 trainable parameters** and uses no pretrained weights. Each 3D case is processed slice by slice; all predictions are reassembled before case-level evaluation. The local CAN3D prototype is described in Section 3.4. The trained CAN3D model has verified validation results in the linked supplements, but no final test result.
 
 ![Figure 1. Implemented U-Net structure; all shown blocks are present in modules.py.](figures/unet2d_architecture.png)
 
@@ -75,7 +75,7 @@ IoU  = TP / (TP + FP + FN)
 
 If both prediction and truth are empty, that class is recorded as missing and excluded from its mean; if only one is empty, its score is zero. Scores are averaged over scans within each patient and then equally over patients. This prevents frequently scanned patients dominating the main result. Scan-macro scores are also stored. The test driver requires explicit final-test authorization and a fixed fitted checkpoint; it has not been run on real test data.
 
-### 3.4 Local CAN3D prototype and course-based training plan
+### 3.4 CAN3D adaptation and course-based training
 
 `can3d.py` implements the methods-text one-downsampling variant of CAN3D [2]: 1-to-8 stem, stride-2 projection to 36 channels, context dilations 2/4/8/1 with 48 latent channels, transposed upsampling and an element-wise shortcut sum before six class logits. Each block uses convolution, learned identity/instance-normalization blending and LeakyReLU(0.1). Context kernels start with center-tap identity mappings; ordinary kernels use Xavier uniform initialization. The prototype has **170,342 parameters**.
 
@@ -85,7 +85,7 @@ The initial planned recipe uses the same saved patient split, preprocessing, Ada
 
 GPU smoke job 709556 completed five steps on one repeated training volume (two warmup, three measured), reporting peak allocated memory 909.998 MiB and median measured step time 0.05695 s; stdout showed CAN3D_SMOKE_PASSED and displayed stderr was empty. These diagnostic values were subsequently verified against the downloaded smoke JSON and its preserved source revision. The timing excludes file loading and does not measure a full epoch, convergence or a controlled 2D/3D benchmark.
 
-The prepared `can3d_pilot.slurm` trains three epochs on all 136 training volumes and validates on all 48 validation scans each epoch, preserving best/last checkpoints and Adam state in a new output directory. It uses batch size 1, Adam 0.001, seed 42 and Dice+CE. Training-only paired left/right flips have probability 0.5; the old baseline used no flips, balanced slice sampling and more updates per epoch. These are different training recipes, so any performance difference cannot be attributed solely to 3D context without a matched control. Validation/test preprocessing and patient assignments remain the same. The 30-minute allocation is a cap, not an estimated training time. The first trial completed with prostate validation Dice 0.6744 and IoU 0.5123; the [verified pilot supplement](results/can3d_pilot_709710.md) contains all class metrics, inspected cases and limitations. A prepared continuation preserves the recipe through epoch 8 and automatically rechecks the best validation model; it has not been submitted yet.
+The prepared `can3d_pilot.slurm` trains three epochs on all 136 training volumes and validates on all 48 validation scans each epoch, preserving best/last checkpoints and Adam state in a new output directory. It uses batch size 1, Adam 0.001, seed 42 and Dice+CE. Training-only paired left/right flips have probability 0.5; the old baseline used no flips, balanced slice sampling and more updates per epoch. These are different training recipes, so any performance difference cannot be attributed solely to 3D context without a matched control. Validation/test preprocessing and patient assignments remain the same. The 30-minute allocation is a cap, not an estimated training time. The first trial completed with prostate validation Dice 0.6744 and IoU 0.5123; the [verified pilot supplement](results/can3d_pilot_709710.md) contains all class metrics, inspected cases and limitations. The completed continuation through epoch 8 selected epoch 7 (validation prostate Dice 0.719317, IoU 0.570924); full class metrics and inspected cases appear in the [continuation supplement](results/can3d_resume_709852.md).
 
 ## 4. Experiments completed so far
 
@@ -183,7 +183,7 @@ The A100 observations were obtained on an NVIDIA A100-PCIE-40GB. These are descr
 
 **Do not deploy the current prototype for automatic prostate contour drafting.** Dice+CE has recovered prostate predictions and is a promising baseline recipe, but best mean validation Dice 0.6945 on six groups is not sufficient evidence for reliable contours. Its boundaries, error cases and fixed-model test performance still need examination. Retain the verified data pipeline and failed-run evidence, retain the inspected error examples and compare the selected baseline with the planned 3D model. Any later usable prototype would still require specialist review.
 
-The initial CAN3D pilot has prostate validation Dice 0.6744 after three epochs, compared with the 2D baseline's selected 0.6945 after seven epochs. Different recipes and budgets prevent a sole-architecture interpretation; these pilot results do not establish an accuracy or efficiency advantage for CAN3D. A final recommendation between 2D and 3D must wait for both trained models, the same fixed test split, comparable resource measurements and sufficient failure-case analysis. The selected Hard route and target Dice are not achieved by selecting the model name or by passing a GPU smoke test.
+The selected CAN3D epoch-7 model has validation prostate Dice 0.719317, compared with 0.694518 for the selected 2D epoch-7 model. Different recipes and budgets prevent a sole-architecture interpretation; these pilot results do not establish an accuracy or efficiency advantage for CAN3D. A final recommendation between 2D and 3D must wait for the frozen test comparison, comparable resource measurements and test failure-case analysis. The selected Hard route and target Dice are not achieved by selecting the model name or by passing a GPU smoke test.
 
 ## 6. Implementation, reproducibility and verification
 
@@ -242,19 +242,34 @@ The output contains a prediction NIfTI on the resized RAS grid, a prostate input
 All thirty local tests passed using temporary synthetic fixtures, including the original 2D regression checks, two fixed-validation-driver checks, three CAN3D architecture checks and a CAN3D training/resumption/prediction integration check. They cover coordinate/grid consistency, variable-depth handling, invalid labels/intensities, split leakage, one-hot targets, known-answer Dice/IoU, patient aggregation, finite gradients, actual small optimization runs, checkpoint reload/resumption, balanced batches, loss arithmetic and guarded test access. The test command is:
 
 ```bash
-python -m unittest -v test_dataset test_modules test_experiment test_validate_best test_can3d
+python -m unittest -v test_dataset test_modules test_experiment test_validate_best test_can3d test_final_evaluate
 ```
 
 The CAN3D integration check also matched all resumed model tensors exactly against uninterrupted fitting with the same epoch-specific flip seeds. Synthetic test outputs are not real clinical accuracy evidence.
 
 Separately, real evidence includes the full 211-pair audit, a three-case prepared-data check, an A100 CUDA check, GPU debug/fit runs and the downloaded case previews. Passing software tests verifies those checked behaviours, not segmentation quality. The student's ability to explain the code is distinct from generated tests or tutor explanations.
 
+### Frozen final test and resource comparison
+
+[final_evaluation_plan.json](final_evaluation_plan.json) fixes the two independently validated epoch-7 checkpoint hashes, original patient split, seed 42 and 64x128x128 input grid before test results are read. `final_compare.slurm` runs the two models in separate processes on the same allocated GPU; it performs no training. Each of 27 test scans is warmed up twice and timed three times. Reported per-case time is the median from preprocessed CPU input to a complete CPU hard mask, including transfers and argmax, excluding disk, preprocessing, metrics and plotting. Peak PyTorch allocated/reserved memory includes model and inference tensors, excluding CUDA context and other processes.
+
+The driver saves per-class Dice/IoU, patient-macro and scan-macro summaries, runtime provenance and all resized-RAS predictions. Five low-prostate-Dice CAN3D cases from different test groups are selected for panels; U-Net renders exactly the same cases. This selection describes failures and does not change either model. A fixed CAN3D-first order and different training recipes remain limitations; no test result will drive further tuning.
+
+```bash
+# Run once after uploading the frozen evaluator, plan and launcher.
+sbatch final_compare.slurm
+# Inspect the existing task; do not resubmit to view results.
+squeue --me
+tail -n 40 runs/final_compare_*.out
+tail -n 20 runs/final_compare_*.err
+```
+
 ## 7. Remaining work and limitations
 
 The current evidence is limited by a small validation cohort, filename-based identity grouping, downsampled anatomy, single-seed trials and a small, deliberately selected set of inspected error cases. A/B have unequal budgets; B/D have a matched three-epoch budget but no repeat-seed uncertainty estimate. Dice+CE improves validation overlap, but the main final-test objective remains unverified. The following results are intentionally not invented in this draft:
 
 - Controlled profiling of the selected baseline, and assessment of any later changed model on fresh error examples.
-- CAN3D continuation/convergence evidence and a fixed-model 2D/3D test comparison; the initial three-epoch 3D pilot and feasibility diagnostic are complete.
+- A fixed-model 2D/3D test comparison; CAN3D continuation and complete best-checkpoint validation are finished.
 - Frozen-model test Dice/IoU and a direct 2D-versus-3D comparison.
 - Controlled full-model resource profiling and final 2D/3D failure-case comparison; the current three baseline validation cases are preliminary evidence.
 
@@ -269,7 +284,7 @@ Verification included source/manifest hashes, known-answer calculations, synthet
 ## References
 
 1. Ronneberger, O., Fischer, P. and Brox, T. (2015). [U-Net: Convolutional Networks for Biomedical Image Segmentation](https://arxiv.org/abs/1505.04597).
-2. Dai, W. et al. (2021). [CAN3D: Fast 3D Medical Image Segmentation via Compact Context Aggregation](https://arxiv.org/abs/2109.05443). Selected main-model reference; implementation pending.
+2. Dai, W. et al. (2021). [CAN3D: Fast 3D Medical Image Segmentation via Compact Context Aggregation](https://arxiv.org/abs/2109.05443). Main-model reference; implemented methods-text one-downsampling adaptation with differences declared in Section 3.4.
 3. Dowling, J. and Greer, P. (2021). [Labelled weekly MR images of the male pelvis](https://doi.org/10.25919/45t8-p065). CSIRO Data Collection, version 2.
 4. Dowling et al. (2015). [Automatic Substitute Computed Tomography Generation and Contouring for MRI-Alone External Beam Radiation Therapy From Standard MRI Sequences](https://doi.org/10.1016/j.ijrobp.2015.08.045). Data were provided by HipMRI Study; non-commercial educational use and acknowledgement follow the supplied data-use terms.
 5. COMP3710 (2026). Contact 6: Neural Networks; Contact 7: ConvNets, Segmentation and Object Detection. Course teaching materials.

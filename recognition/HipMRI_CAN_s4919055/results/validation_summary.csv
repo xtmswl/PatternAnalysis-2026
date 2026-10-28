@@ -35,3 +35,9 @@ run,completed_epoch,scope,class_id,class_name,patient_macro_dice,patient_macro_i
 709710,3,48 validation scans / 6 groups,3,Bladder,0.613564140323284,0.4627916834907335,180936,298216
 709710,3,48 validation scans / 6 groups,4,Rectum,0.5790863852069785,0.4148361164518035,67549,117072
 709710,3,48 validation scans / 6 groups,5,Prostate,0.6743805419501431,0.5122886388688475,49917,68446
+709852_best,7,48 validation scans / 6 groups; fixed best checkpoint,0,Background,0.9943629846036676,0.9888258697756807,30185205,30226830
+709852_best,7,48 validation scans / 6 groups; fixed best checkpoint,1,Body,0.9686081271441954,0.9393102104246318,18184941,18330893
+709852_best,7,48 validation scans / 6 groups; fixed best checkpoint,2,Bones,0.7843124475070868,0.6464943025883656,1663100,1441240
+709852_best,7,48 validation scans / 6 groups; fixed best checkpoint,3,Bladder,0.7469822059151446,0.6212728122204019,180936,223299
+709852_best,7,48 validation scans / 6 groups; fixed best checkpoint,4,Rectum,0.6839667157460428,0.5305579349193922,67549,61695
+709852_best,7,48 validation scans / 6 groups; fixed best checkpoint,5,Prostate,0.719316520974898,0.5709243124575404,49917,47691

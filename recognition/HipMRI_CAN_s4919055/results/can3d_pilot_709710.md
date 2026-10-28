@@ -68,3 +68,5 @@ low-scoring examples from three different validation patients, plus one
 train/validation preview. No test cases are opened. Its 40-minute allocation
 is a limit; the expected extra five epochs are roughly 24 minutes based on
 this run, excluding queue time and subsequent diagnostics. Results are pending.
+
+Update 29 October: continuation 709852 is now verified; all-class preview/validation agreement is confirmed. See [continuation evidence](can3d_resume_709852.md) for epoch-7 selection and the fixed final-test plan. The earlier pending statements describe the pilot audit stage.
