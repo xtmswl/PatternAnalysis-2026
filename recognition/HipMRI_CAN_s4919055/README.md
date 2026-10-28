@@ -4,6 +4,8 @@ Xiaotian Mao | s4919055 | COMP3710, Semester 2, 2026
 
 **Working report draft - completed work through 28 October 2026.** The implemented model is a 2D U-Net. CAN3D is the selected Hard model but is not implemented yet. All reported segmentation scores below are training diagnostics or validation results; no final test results or 2D-versus-3D performance claims are available.
 
+**Later verified update:** [Continuation 709041](results/continuation_709041.md) adds epochs 4-8 and inspected best-model previews. Best historical validation prostate Dice is 0.694518 at epoch 7; the epoch-8 score is 0.606007. Sections below retain the earlier three-epoch report snapshot until the full best-checkpoint validation recheck is available.
+
 ## 1. Problem and research question
 
 This project investigates automatic organ segmentation in pelvic MRI, with prostate segmentation as the main outcome. The intended prototype would draft contours for an imaging specialist to review. Missing a small organ can make a high average score misleading, so the investigation considers each anatomical class and visible failure cases rather than background accuracy alone.

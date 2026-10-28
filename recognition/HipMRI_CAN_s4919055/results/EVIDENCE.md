@@ -2,6 +2,8 @@
 
 The report's validation values are summarized in validation_summary.csv, and the curves in learning_history.csv.
 
+The later [709041 continuation update](continuation_709041.md) has independently verified history/latest-validation and inspected best-checkpoint previews. Its full per-class report is epoch 8; the epoch-7 best score is recorded in history, pending a separate best-checkpoint validation recheck.
+
 - 703884: inspected downloaded config/history/latest validation; 25 completed epochs, then TIMEOUT from student-supplied scheduler/error output.
 - 704488: inspected downloaded config/history/latest validation; 3 epochs, same fixed validation cases and manifest hash.
 - 708618: inspected downloaded config/history/latest validation; matched three-epoch Dice+CE pilot. All four source hashes and fixed B/D settings checked; patient-macro scores independently recomputed.
