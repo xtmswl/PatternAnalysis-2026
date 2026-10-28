@@ -15,9 +15,10 @@ import numpy as np
 import torch
 
 from dataset import build_inventory, make_patient_split
-from experiment import hard_overlap, aggregate_cases
+from experiment import hard_overlap, aggregate_cases, file_sha256
 from train import main as train_main, training_slice_order
 from predict import main as predict_main
+from validate_best import main as validate_best_main
 
 
 class MetricTests(unittest.TestCase):
@@ -207,6 +208,14 @@ class DriverTests(unittest.TestCase):
         self.assertEqual(metrics['volume_batch_size'],1)
         saved=nib.load(next(preview.glob('*_prediction_RAS.nii.gz')))
         self.assertEqual(saved.shape,(16,16,4))
+        checked=self.root/'can3d-best-validation'
+        self.assertEqual(self.quiet(validate_best_main,self.common+[
+            '--checkpoint',str(resumed/'best.pt'),
+            '--expected-sha256',file_sha256(resumed/'best.pt'),
+            '--output',str(checked)]),0)
+        checked_report=json.loads((checked/'validation_best.json').read_text())
+        self.assertEqual(checked_report['training_config']['model'],'can3d')
+        self.assertTrue(checked_report['matches_recorded_validation_score'])
         # Explicit synthetic held-out evaluation must use checkpoint architecture,
         # even when the CLI architecture is left at its old U-Net default.
         for scan in self.manifest['splits']['test']['scans']:

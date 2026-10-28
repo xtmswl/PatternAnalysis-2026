@@ -13,3 +13,5 @@ The report's validation values are summarized in validation_summary.csv, and the
 - 700021: selected-slice training/debug and full-case preview values transcribed from user-supplied logs; not a validation/test benchmark.
 
 Raw manifests, reports, MRI volumes and model weights are not copied into this results folder. The figures are report visuals, not a redistributed training dataset. No final test results are available. The original check-off preparation content is archived separately and not rewritten as later progress.
+
+- 709710: downloaded current source hashes, fixed split, all class metrics and two PNG/NIfTI previews independently verified; raw709556smoke JSON also checked. Details: [CAN3D pilot](can3d_pilot_709710.md).
