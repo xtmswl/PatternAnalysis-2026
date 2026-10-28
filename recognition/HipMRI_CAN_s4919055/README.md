@@ -1,162 +1,23 @@
 # HipMRI Prostate Segmentation: CAN3D versus a 2D U-Net Baseline
 
-Student: Xiaotian Mao
+Xiaotian Mao | s4919055 | COMP3710, Semester 2, 2026
 
-Student Number: s4919055
+**Working report draft - completed work through 28 October 2026.** The implemented model is a 2D U-Net. CAN3D is the selected Hard model but is not implemented yet. All reported segmentation scores below are training diagnostics or validation results; no final test results or 2D-versus-3D performance claims are available.
 
-Course: COMP3710, Semester 2, 2026.
+## 1. Problem and research question
 
-## Scope and actual status
+This project investigates automatic organ segmentation in pelvic MRI, with prostate segmentation as the main outcome. The intended prototype would draft contours for an imaging specialist to review. Missing a small organ can make a high average score misleading, so the investigation considers each anatomical class and visible failure cases rather than background accuracy alone.
 
-On 15 October 2026 the student changed the selected route from Normal 2D CAN
-to **Hard CAN3D**, retaining HipMRI anatomical segmentation. The main model
-will segment a 3D MRI volume; a standard 2D U-Net will predict slices from the
-same volumes as the baseline. Both will be evaluated on the same held-out
-patients and spatial grid. This choice is permitted by Section 2.2, which
-requires a baseline comparison; it does not require implementing every model
-in the difficulty table. Hard permits up to 20/20 implementation marks and
-40/40 overall, conditional on the work meeting all marking criteria/hurdles.
+The planned comparison asks whether CAN3D's volumetric context improves prostate boundaries and continuity enough to justify its memory and inference cost compared with a standard 2D U-Net. The completed work establishes the data pipeline, implements the baseline and investigates why early training misses small organs. It does not yet answer the 3D comparison question. The planned acceptance criteria are preserved in Appendix A; they are targets, not achieved results.
 
-Current evidence: personal fork and topic-recognition branch exist. The local
-brain PNG archive is excluded. Student terminal screenshots confirm access
-to the course 3D directories, CPU allocation 662151 on vcpu-2, successful
-PyTorch 2.14.0+cu130/nibabel 5.4.2 imports and an initial audit of B006_Week0.
-The saved dataset.py was uploaded and run on the real B006_Week0 pair on
-vcpu-2. The student screenshot confirms all four checks passed: both_3d,
-same_shape, same_affine and finite_nonnegative_integer_labels. Local
-synthetic checks also cover shape/affine mismatches and fractional labels.
+## 2. Dataset and preprocessing
 
-The 2D U-Net baseline, soft Dice loss and baseline training/prediction drivers
-have local synthetic checks. On 27 October, the student supplied the output
-of real GPU debug job 700021: BASELINE_DEBUG_PASSED and
-PREDICTION_PREVIEW_SAVED, with an empty displayed .err log. This establishes
-short training and saved-weight inference on a training case, not generalization.
-The first baseline fit, job 703884, completed 25 of 30 requested epochs before
-the two-hour allocation expired. Its last validation report predicted no
-bladder, rectum or prostate voxels; this is a failed organ-segmentation pilot,
-not a successful baseline. CAN3D remains unimplemented; a usable trained
-baseline and held-out testing remain pending.
-On 26 October the student supplied the output of Slurm job 696947 on a100-8:
-CUDA available=True, NVIDIA A100-PCIE-40GB, CUDA_CHECK_PASSED. This establishes
-the tiny diagnostic's GPU execution, not segmentation accuracy or CAN3D memory.
-The real filename inventory reports 211 MRI files, 211 mask files,
-211 paired scans, 38 candidate patient IDs and zero naming/pairing issues.
-The publisher label mapping is now verified. Filename-derived patient
-identity interpretation remains an explicit filename-based assumption.
-The full content audit completed remotely:211checked,211passed,0failed;
-its downloaded report has been independently inspected and matches the
-saved split case list and identity hash. On 28 October the student reported
-that the compulsory check-off was completed and the tutor gave no specific
-recommendations. This is student-reported completion, not new model evidence.
+### 2.1 Source, labels and data integrity
 
-## Research question
+The course-provided HipMRI data are stored on Rangpur under `/home/groups/comp3710/HipMRI_Study_open`. MRI files in `semantic_MRs` are paired with manual segmentation files in `semantic_labels_only` using the patient/week filename stem. There are 211 paired scans and 38 filename-derived patient groups. The publisher describes Week0 as pre-treatment and Weeks1-7 as weekly scans during radiotherapy [3,4].
 
-Does CAN3D's volumetric multi-scale context reduce prostate boundary and
-slice-transition errors compared with a 2D U-Net, and what are the memory and
-inference-time trade-offs? Neither model is assumed to win. Analyse both
-held-out overlap scores and actual failure cases.
-
-## Course and literature basis
-
-The latest Ed attachment was checked on 26 October:
-[COMP3710_Report_2026_v2.5.pdf](https://edstem.org/au/courses/38242/discussion/3600790).
-Its cover says Version 2.5 Final Assessment Specification and still displays
-DRAFT in the title. Sections 2.2 and 3-6 retain the relevant HipMRI requirements.
-The model table on p. 6 lists CAN3D as Hard, reference [5], with downsampled
-HipMRI 3D data and a test Dice target of at least 0.7. The U-Net baseline is
-reference [1]. Appendix A, p. 17, specifies the data location. Sections 3-6
-specify consultation, files, marking, Git/PR and AI disclosure.
-
-Contact 7, pp. 16-17 and 22-28, teaches U-Net, dilation, CAN3D, mask encoding
-and multiclass Dice. Contact 6 teaches mini-batch gradient descent,
-backpropagation, Adam, preprocessing, validation and overfitting. The course
-CNN notebook demonstrates an explicit PyTorch training loop and eval/no_grad.
-These remain the training foundation after the difficulty change.
-
-The main reference is Dai et al., CAN3D: Fast 3D Medical Image Segmentation
-via Compact Context Aggregation. Its abstract and Sections 3.1 architecture
-and training settings have been consulted; a full implementation-level reading
-and architecture diagram check are still required before coding. Do not
-replace it with the former Yu/Koltun 2D context module and call it CAN3D.
-Document the selected 3D context blocks, normalisation, dilation, shortcuts,
-downsampling and output-resolution recovery against the paper/lecture.
-
-## Data pipeline and leakage prevention
-
-- Course data root: /home/groups/comp3710/HipMRI_Study_open.
-- Appendix A names semantic_MRs for 3D MRIs and semantic_labels_only for
-  masks; both directories are confirmed by the student screenshot. Individual
-  sample filenames are now confirmed. Match files by patient/week prefix,
-  not directory-listing order. The full filename inventory and original-volume
-  content audits passed. A three-training-case downsampling loader pilot also passed.
-- Original collection: [CSIRO male pelvis MRI](https://doi.org/10.25919/45t8-p065).
-  The course sheet describes 38 patients and 211 3D scans. The real Rangpur
-  filename inventory now confirms 211 paired scans and 38 candidate IDs. Repeated scans from one patient must
-  stay in the same split; volume/case ID is not automatically patient ID.
-- Example from observed filenames: B006 Week0/Week1 scans belong to the same
-  provisional patient group. Verify this against the full manifest or data
-  description before finalising a split.
-- Audit NIfTI shape, affine, orientation, voxel spacing, image-mask alignment,
-  label values and anatomical mapping. Preserve these during preprocessing.
-- Use aligned image interpolation and nearest-neighbour mask resampling for
-  any justified downsampling. The target grid will follow data/memory evidence.
-- PyTorch 3D images: B x 1 x D x H x W; logits/one-hot Dice targets:
-  B x K x D x H x W. Verify the NIfTI-to-tensor axis conversion explicitly.
-- Split by patient once and save the manifest. Derive baseline slices from
-  the same preprocessed 3D volumes, preserving the exact patient split/grid.
-  Reassemble baseline predictions for a consistent volumetric evaluation.
-- Normalize images consistently using training-only fitted statistics where
-  needed. Do not scale masks as continuous image intensities.
-
-## Initial paired-data audit
-
-Observed on 15 October from the student's initial audit and subsequent
-execution of the saved dataset.py on Rangpur:
-
-| Property | B006_Week0 MRI | B006_Week0 mask |
-| --- | --- | --- |
-| File suffix | LFOV.nii.gz | SEMANTIC.nii.gz |
-| Shape | 256 x 256 x 128 | 256 x 256 x 128 |
-| Voxel spacing | approximately 1.5625, 1.5625, 1.56 | same |
-| Orientation | L, P, S | L, P, S |
-| Stored dtype | int32 | int32 |
-| Mask values | not applicable | 0, 1, 2, 3, 4, 5 |
-
-Shape/affine comparisons returned True and label values were finite integers.
-This establishes initial grid compatibility for one pair; it does not prove
-full-dataset integrity or subtle anatomical boundary correctness. The
-publisher documentation identifies prostate as code 5 (see mapping below).
-
-The audit is a saved function in dataset.py. From the project folder on a
-Rangpur compute node, run:
-
-```bash
-python dataset.py --case B006_Week0
-```
-
-To save a numeric-label visual preview on a compute node, run:
-
-```bash
-python dataset.py --case B006_Week0 --overlay runs/preview_B006.png
-```
-
-Matplotlib 3.11.2 was installed in the remote torch environment. The original
-numeric-code preview was generated on Rangpur, downloaded and visually
-inspected. Selected slices show no obvious gross image/mask displacement;
-this does not validate all slices, subtle boundaries or the full dataset.
-Both volumes are reoriented together to RAS for axial display. Each nonzero
-code is shown at its largest-area axial slice; background code 0 is omitted.
-Percentile contrast is display-only. Generated previews stay in ignored runs/.
-The updated code uses publisher label names; a new named preview has not
-been run remotely yet.
-
-### Verified anatomical label mapping
-
-The publisher's [BriefDataDescription.txt, collection v2](https://data.csiro.au/dap/ws/v2/collections/52549/support/5034),
-retrieved 15 October 2026, specifies:
-
-| Code | Class |
-| --- | --- |
+| Code | Anatomical class |
+|---|---|
 | 0 | Background |
 | 1 | Body |
 | 2 | Bones |
@@ -164,637 +25,214 @@ retrieved 15 October 2026, specifies:
 | 4 | Rectum |
 | 5 | Prostate |
 
-The same document describes Week0 as pretreatment and Weeks1–7 as weekly
-scans during radiotherapy. The updated audit also rejects codes outside 0–5.
-The source mapping and original preview are consistent; full-dataset label
-validation subsequently completed as part of the full211pair audit.
-A shared-directory documentation search found
-only the use agreement; the label description was retrieved from CSIRO's
-public supporting-file API rather than inferred from anatomy or label order.
+All 211 pairs passed the recorded content audit: paired spatial dimensions and affines agreed, MRI intensities were finite, and mask codes were valid integers from 0 to 5. Each original mask contained all six codes. Of the scans, 210 had dimensions 256 x 256 x 128; K019_Week1 had depth 144 and was retained. The original arrays used LPS orientation. Training scans had in-plane spacing from 1.40625 to 1.875 mm and through-plane spacing near 1.56 mm. These checks establish file integrity, not the clinical correctness of every annotation.
 
-To use another dataset location, pass --data-root /path/to/HipMRI_Study_open.
-The shared course path is on Rangpur, so the default command does not find
-data on the Mac. Code is stored in the local Git repository and a working
-copy must be transferred to Rangpur before remote execution. Terminal
-commands launch saved code; the submitted implementation belongs in files.
+The training-set audit found 1,187,172 prostate voxels, approximately 0.104% of training voxels. This is evidence of class imbalance. A local PNG archive containing brain images was excluded because it was not the selected HipMRI dataset.
 
-## Full filename inventory
+### 2.2 Patient-level experimental split
 
-On a Rangpur compute node, run:
+| Split | Patient groups | Scans | Purpose |
+|---|---:|---:|---|
+| Training | 26 | 136 | Parameter updates |
+| Validation | 6 | 48 | Select checkpoints and investigate settings |
+| Test | 6 | 27 | Reserved for final evaluation |
+| Total | 38 | 211 | Complete paired inventory |
 
-```bash
-python dataset.py --inventory runs/inventory.json
+The split was generated with seed 42. All weeks from the same filename prefix remain together, preventing repeat scans from crossing groups. Membership, naming consistency and the manifest hash were checked. The grouping assumes that the prefix represents patient identity; it does not independently establish biological identity beyond the supplied filenames. The split has not been changed in response to model scores. File-integrity auditing included the dataset inventory, while model-development experiments have used training and validation data only.
+
+### 2.3 Implemented preparation
+
+Each aligned MRI/mask pair is reoriented to RAS, and array axes are converted from NIfTI X,Y,Z to PyTorch depth,height,width. Each MRI is standardized using its own mean and population standard deviation, with a small denominator clamp for constant images. There are no pooled validation/test normalization statistics.
+
+The complete field of view is resized to 64 x 128 x 128 voxels. MRI intensities use trilinear interpolation; masks use nearest-exact interpolation on the corresponding voxel-centre grid, retaining integer labels. Masks become six-channel one-hot targets. The output affine and original geometry are retained. This is a fixed voxel shape, **not common physical voxel spacing**. Resizing can remove fine boundary detail, especially for small organs. No label-guided crop is used for inference. The optional paired-flip augmentation is disabled in the reported runs.
+
+## 3. Implemented model and evaluation
+
+### 3.1 Standard 2D U-Net baseline
+
+The implemented network follows the encoder-decoder and concatenated skip-connection design of U-Net [1]. Four encoder levels extract features using two padded 3 x 3 convolutions with ReLU, followed by 2 x 2 pooling. A bottleneck is followed by four decoder levels using transposed convolutions, concatenated encoder features and two convolutions. A 1 x 1 output convolution produces six raw class logits per pixel.
+
+The initial channel width is 16, giving encoder/bottleneck widths 16,32,64,128,256. This reduces the original paper's channel count. Padded convolutions preserve dimensions rather than reproduce the original valid-convolution cropping. The network has **1,940,902 trainable parameters** and uses no pretrained weights. Each 3D case is processed slice by slice; all predictions are reassembled before case-level evaluation. CAN3D [2] remains planned; its architecture or results are not presented as completed work.
+
+![Figure 1. Implemented U-Net structure; all shown blocks are present in modules.py.](figures/unet2d_architecture.png)
+
+### 3.2 Training and checkpoint selection
+
+Reported experiments use Adam with learning rate 0.001, a slice batch size of 8 and seed 42. The original loss is one minus the equally weighted mean soft Dice over six classes, including background. Softmax is applied inside the loss. Smoothing is 1e-6. The training loop performs forward prediction, loss calculation, gradient clearing, backpropagation and an optimizer step, following the course workflow [5]. Validation uses evaluation mode with no gradient updates.
+
+`best.pt` is selected by validation patient-macro prostate Dice. `last.pt` retains the current weights, Adam state, completed epoch and history. Resumption preserves the earlier best checkpoint and refuses incompatible settings. With zero prostate Dice at every epoch, the retained best can be the earliest checkpoint; therefore the diagnostic prediction panels use `last.pt` from the three-epoch balanced run.
+
+### 3.3 Metrics and safeguards
+
+For each class, hard predictions are compared with the full reassembled volume:
+
+```text
+Dice = 2 TP / (2 TP + FP + FN)
+IoU  = TP / (TP + FP + FN)
 ```
 
-This reports NIfTI image/mask counts, one-to-one matched scans, candidate
-patients and issues. Pair by exact case stem, not list position. Both .nii
-and .nii.gz files are indexed; duplicate cases, missing partners, unexpected
-suffixes or patient/week patterns cause a nonzero exit status while saving
-the report for inspection. File contents are not loaded or validated in this
-mode. B006_Week0 and B006_Week1 are grouped under candidate ID B006; filename
-identity interpretation still needs confirmation before creating splits.
-No train/validation/test split is created by this command. The student ran
-it on Rangpur on 15 October: 211 image files, 211 mask files, 211 paired
-scans, 38 candidate patients and issues=0. The report was saved to
-runs/inventory.json. This verifies the filename inventory, not every scan
-content or the biological identity mapping. Synthetic file-tree checks also
-covered repeat-patient grouping, JSON output and these failure cases.
+If both prediction and truth are empty, that class is recorded as missing and excluded from its mean; if only one is empty, its score is zero. Scores are averaged over scans within each patient and then equally over patients. This prevents frequently scanned patients dominating the main result. Scan-macro scores are also stored. The test driver requires explicit final-test authorization and a fixed fitted checkpoint; it has not been run on real test data.
 
-## Reproducible patient split preparation
+## 4. Experiments completed so far
 
-Create one new manifest on a compute node:
+| Run | Experiment | Completed work | Main observation |
+|---|---|---:|---|
+| 700021 | Short training on selected slices | 100 steps | Training/reload and prediction checks passed |
+| 703884 (A) | All training slices, Dice loss | 25 of 30 | Two-hour timeout; validation prostate Dice stayed zero |
+| 704488 (B) | Balanced training slices, Dice loss | 3 | Rectum learned partially; bladder/prostate predictions absent |
+| 708234 (C) | Continue B with the same settings | 4-8 | Completed; bladder/prostate predictions still absent |
 
-```bash
-python dataset.py --split runs/split_seed42.json
-```
+Run A visits every training slice once each epoch. Runs B/C use all 136 training cases but draw half of each case's slice budget from slices containing prostate and half from slices without it. Positive slices may repeat, and not every original slice is visited that epoch. With batch size 8, interleaving gives four positive and four negative slices when both groups exist. The fallback for a case with only one group is to use every slice once. Validation always uses complete volumes. Each balanced epoch recorded 4,352 positive slices among 8,704 draws.
 
-Defaults are seed 42, six validation patients and six test patients; with 38
-candidate patient groups, 26 remain for training. These are simple project
-choices, not a course-prescribed ratio or tuned result. Patient groups are
-sorted before a seeded shuffle. All scans and derived slices for one prefix
-stay together; both models must reuse the saved manifest. Do not choose a
-new seed after observing test scores. The command refuses to overwrite an
-existing file and records a hash of the case/patient inventory identities.
-The real command completed on 15 October, seed 42, with patient_overlap=False:
+These experiments investigate training failure, rather than provide a final controlled model comparison. Run A has 25 epochs and the fully downloaded B report has 3; their different budgets and sampled training distributions limit causal conclusions. Run C preserves B's training recipe and adds five epochs. Its numbers here come from the student's terminal output; its detailed JSON report has not yet been downloaded.
 
-| Split | Candidate patients | Scans |
-| --- | --- | --- |
-| Training | 26 | 136 |
-| Validation | 6 | 48 |
-| Test | 6 | 27 |
-| Total | 38 | 211 |
+![Figure 2. Training curves and prostate validation Dice. A/B use downloaded JSON; C uses terminal output. Different sampled training distributions limit direct loss comparisons.](figures/learning_curves.png)
 
-The manifest runs/split_seed42.json was downloaded privately and inspected
-locally: 38 unique disjoint patient groups, 211 unique cases, consistent
-patient/case/file names and a matching recomputed identity hash. This checks
-manifest consistency, not biological identity or all file contents. Confirm the filename-derived identity rule before relying on this split
-for final unseen-patient claims. This command does not train a model.
+The short debug run reached prostate Dice 0.8743 on a few selected training slices, but its complete training-case preview scored 0.2814. These different scopes demonstrate why a selected-slice debug score cannot serve as a validation or test result.
 
-Synthetic checks passed for 38 groups with two scans each: 26/6/6 allocation,
-complete/disjoint grouping, reproducibility under reordered inventory,
-invalid-count/invalid-inventory rejection and refusing overwrite. The real
-split was created successfully on the new CPU allocation 662383/vcpu-2; the
-student screenshot confirms the totals and no prefix-group overlap. The downloaded JSON was independently checked locally as described above.
-The subsequent full-volume integrity audit completed with211passes and0failures;
-its per-case report has been independently inspected locally.
+## 5. Preliminary results and analysis
 
-## Full data-integrity audit
+### 5.1 Per-class whole-volume validation
 
-After filename inventory and split preparation, run on a CPU compute node:
+The following patient-macro results cover the same 48 validation scans from six groups. A is the last completed epoch 25; B is epoch 3. They are preliminary validation results, not final test scores or a CAN3D comparison.
 
-```bash
-python dataset.py --audit-all runs/audit_all.json
-```
+| Class | A Dice | A IoU | B Dice | B IoU |
+|---|---:|---:|---:|---:|
+| Background | 0.9966 | 0.9933 | 0.9932 | 0.9865 |
+| Body | 0.9777 | 0.9565 | 0.9551 | 0.9146 |
+| Bones | 0.9006 | 0.8194 | 0.7216 | 0.5658 |
+| Bladder | 0.0000 | 0.0000 | 0.0000 | 0.0000 |
+| Rectum | 0.0000 | 0.0000 | 0.5600 | 0.3958 |
+| Prostate | 0.0000 | 0.0000 | 0.0000 | 0.0000 |
 
-This reloads the full inventory and sequentially reads every MRI and mask.
-It checks readable volumes, 3D shape, image/mask shape and affine agreement,
-finite positive matching voxel spacing, finite MRI intensities, and finite
-nonnegative integer mask codes restricted to the publisher's 0–5 mapping.
-Per-code mask counts are included in the report. These checks do not prove
-expert annotations are correct or replace visual inspection. No fitted
-normalization, model selection, resampling or source-file edits occur.
+In A, the model predicted only background, body and bones. The validation truth contained 49,917 prostate voxels, but the prediction contained zero. Bladder and rectum were also completely omitted. Thus falling overall training loss did not establish useful small-organ segmentation.
 
-Progress and JSON checkpoints are saved every ten cases and on failures.
-The report records expected/checked/passed/failed counts, complete status,
-per-case observations and the case/patient identity hash. Failures are kept
-for inspection; no case is automatically dropped and the split is unchanged.
-A report with complete=false is partial even if failures=0. A completed
-report with any failures yields a nonzero exit status.
+In B, rectum Dice reached 0.5600, with 114,516 predicted rectum voxels against 67,549 true voxels. This indicates partial overlap, with substantial errors still present. Prostate and bladder predictions remained empty. At epoch 8 in C, prostate Dice was still displayed as 0.000000 and predicted prostate voxels were zero. More epochs and balanced slices have therefore not yet produced a usable prostate baseline.
 
-Local synthetic checks passed for a valid pair, nonfinite MRI values,
-shifted mask affine, unknown class code and an unreadable scan, including
-continued reporting, CLI exit status and unchanged source-file hashes.
-The student ran the real audit on CPU job662383/vcpu-2. The screenshot
-confirms Audit complete=True,checked_pairs=211,passed_pairs=211,failed_pairs=0
-and the saved runs/audit_all.json. The downloaded report was independently
-checked locally: all 211 case records pass their eight checks, coverage equals
-the split case set and the identity hash matches. No failed
-case was removed; source data and the existing split remain unchanged.
+Small targets, class imbalance, downsampling and optimization are plausible contributors. The present evidence does not prove one sole cause. A newly implemented Dice-plus-cross-entropy option has passed local software tests, but no real GPU result for it has been supplied. Both loss ingredients are covered in Contact 6/7; combining them with coefficients 1 and 1 is a project adaptation, not a prescribed lecture recipe. Its effect remains unmeasured and is excluded from the results table.
 
-### Observed dimensions and class coverage
+### 5.2 Two observed failure cases
 
-Of the 211 volumes, 210 are 256 x 256 x 128; training case K019_Week1 is
-256 x 256 x 144.
-All are stored int32 with LPS orientation, and all masks contain codes 0–5.
-Image/mask spacing agrees within every pair, but differs between patients.
-Training in-plane spacing ranges from 1.40625 to 1.875 mm, with through-plane
-spacing approximately 1.56 mm. Preprocessing must accommodate the depth variation and
-preserve image/mask alignment; the longer case is retained.
+The downloaded prediction panels and NIfTI counts agree. Both examples use the same epoch-3 checkpoint and the resized RAS grid; see Appendix B. They are two preliminary cases, **not the completed requirement for 3-5 representative final-model failures**.
 
-Training-only voxel counts show prostate code 5 occupies approximately 0.104%
-of training voxels. This motivates per-class overlap assessment and the
-planned lecture-based soft Dice pilot; no model result is claimed. We do not
-fit normalization or alter the split from test-case contents. The pilot input
-grid and preprocessing are defined below; their real-data effect on small
-structures remains to be tested.
+**Training case B006_Week0:** the manual prostate contains 1,287 voxels and the model predicts none. Prostate Dice is zero; rectum Dice is 0.5680. The displayed first, largest and last labelled prostate slices are all missed. Because an already-seen training case fails too, this cannot be explained solely as poor performance on a new patient.
 
-## Aligned training Dataset and pilot grid
+**Validation case C032_Week0:** the manual prostate contains 683 voxels and the prediction again contains none. Prostate Dice is zero; rectum Dice is 0.3710. The complete omission also affects the largest labelled prostate slice, so the problem is broader than a small boundary discrepancy on an extreme slice.
 
-HipMRIVolumeDataset reads the saved manifest, recomputes its identity hash,
-checks disjoint patient/case membership and verifies each recorded filename.
-It opens only the selected split's images. An optional data_root relocates
-the recorded basenames without changing patient assignments. Both model
-routes will use this Dataset rather than independently splitting slices.
+The panels show visible annotations at MRI locations with no obvious global offset in these examples. This is a limited visual check, not proof that all annotations or preprocessing are correct. Blue overlays show false negatives. The first/last labelled slices are not assigned clinical base/apex labels without further anatomical verification. No case was selected from the final test set.
 
-Preprocessing follows Appendix B's per-volume z-score idea. The full MRI is
-normalized by its own mean and population standard deviation, with a small
-denominator clamp for constant images. There is no mask-based normalization
-and no pooled validation/test statistic fitted to training. Reorientation
-uses the NIfTI affine to convert both arrays from their stored orientation
-to RAS. NIfTI XYZ is then transposed to PyTorch ZYX (depth, height, width).
+### 5.3 Resource observations
 
-The initial **pilot**, not a tuned final setting, resizes the complete field
-of view to D,H,W = 64,128,128. This reduces voxel count by about eightfold
-for the usual scans and includes the longer depth-144 case without clipping.
-It is a fixed voxel-count grid, **not** a common physical-spacing grid.
-Per-case spacing still differs; effective output affines and original
-affines/shapes are returned. This trade-off may lose small boundary features
-and must be assessed on training/validation data before final evaluation.
+| Measurement | Observation | Scope and limitation |
+|---|---|---|
+| U-Net parameters | 1,940,902 | Implemented 2D model |
+| Peak training allocation | 167.34 MiB | PyTorch allocation recorded in A/B; excludes driver/context and other device memory |
+| A100 complete-case preview | 0.2223 s | One debug training case, run 700021; excludes file reading/plotting |
+| CPU complete-case previews | 2.6096 / 1.7711 s | Two diagnostic cases, run 704533; different device/checkpoint |
+| CAN3D resources | Not measured | Model not implemented |
 
-Images use trilinear interpolation with align_corners=False; labels use
-nearest-exact interpolation on the same voxel-centre grid, so no fractional
-anatomical codes are introduced. See [PyTorch interpolation documentation](https://docs.pytorch.org/docs/2.14/generated/torch.nn.functional.interpolate.html).
-Each item contains image 1xDxHxW, integer mask DxHxW and one-hot target
-6xDxHxW, with six fixed channels even if some labels are absent. The model
-receives only image; mask/target are the supervised answers. An optional
-paired left/right flip is restricted to training and disabled for this pilot.
-volume_to_slices produces Dx1xHxW and Dx6xHxW for the 2D baseline. Evaluation
-must preserve slice order and reassemble a whole volume before scoring.
+The A100 observations were obtained on an NVIDIA A100-PCIE-40GB. These are descriptive diagnostic measurements. They do not constitute repeated, controlled latency measurements or comparable 2D/3D resource profiling. The tiny CUDA check's 0.174 MiB allocation is excluded because it did not run the U-Net. CPU preview times must not be compared directly with A100 timings to claim a model advantage.
 
-On a compute allocation, reuse the existing manifest:
+### 5.4 Engineering recommendation at this stage
 
-```bash
-python dataset.py --loader-check runs/loader_check.json --samples 3
-```
+**Do not use the current model for automatic prostate contour drafting.** It omits the target organ on validation scans and an inspected training example. Strong background/body scores do not compensate for this failure. Retain the verified data pipeline and failed-run evidence, diagnose small-organ optimization and validate changes before considering automated drafting. Any later usable prototype would still require specialist review.
 
-Or submit the saved CPU job from login0 (mkdir runs before submission):
+There is currently no evidence that CAN3D improves accuracy or efficiency, because it has not been implemented. A final recommendation between 2D and 3D must wait for both trained models, the same fixed test split, comparable resource measurements and sufficient failure-case analysis. The selected Hard route and target Dice are not achieved by selecting the model name or by passing a GPU smoke test.
+
+## 6. Implementation, reproducibility and verification
+
+### 6.1 Code organization
+
+| File | Implemented responsibility |
+|---|---|
+| modules.py | 2D U-Net, soft Dice and optional Dice+CE objective; PyTorch only |
+| dataset.py | Inventory, patient split, integrity checks, aligned preparation and slice conversion |
+| train.py | Debug/fit/validation, checkpoint selection/resumption and guarded final-test driver |
+| predict.py | Reload weights, predict complete cases and save masks/error panels |
+| experiment.py | Reproducibility helpers, hard metrics, case/patient aggregation and plotting |
+| test_dataset.py / test_modules.py / test_experiment.py | Synthetic software and numerical verification |
+
+Small aggregate evidence accompanies this report in [validation_summary.csv](results/validation_summary.csv) and [learning_history.csv](results/learning_history.csv). Downloaded raw reports, complete patient manifests and medical-volume files are kept outside the repository. Dataset and model-weight formats, runs and caches are ignored by Git.
+
+### 6.2 Recorded environment and split
+
+The downloaded A/B configurations record Python 3.11.16, PyTorch 2.14.0+cu130, CUDA package 13.0, NumPy 2.4.6 and NiBabel 5.4.2. The setup output recorded Matplotlib 3.11.2; that package's version was not serialized in those run configurations. This distinction should be retained when reproducing the older runs.
+
+The fixed manifest SHA256 is `47a19c81dee93d9ddd2a920b86572bf57db240cc8a968ea731305d54a181d25e`. Each run records source hashes, model/input settings, seed, device, host and Slurm job ID. New output directories refuse overwrite, and manifests are checked for identity consistency and cross-split overlap. Runs A/B match the inspected manifest; A's original source hashes were also checked against the corresponding committed files. Later code changes are recorded in progressive commits. Bitwise reproducibility across different hardware or library versions is not assumed.
+
+### 6.3 Example usage
+
+Commands assume a checkout containing this draft's code. Raw data must be available through the course-provided location; checkpoints are generated by training, not committed. Heavy Python commands must run in a compute allocation rather than the shared login node.
+
+Inside an allocated CPU shell with the course `torch` environment active, a fresh working directory can prepare the deterministic split:
 
 ```bash
 mkdir -p runs
-sbatch loader_check.slurm
+python dataset.py --split runs/split_seed42.json
+python dataset.py --case B006_Week0
 ```
 
-This loads the first and longest training cases, plus another case if
-available, checks finite tensors, one-hot labels, slice reconstruction and
-retention of all six labels. Its JSON reports post-resize class counts.
-LOADER_CHECK_PASSED is required from the real run; a missing label is a
-failure to investigate, not permission to discard the case. The diagnostic
-does not train a model or prove boundary quality. It needs CPU resources,
-while subsequent model training uses the GPU.
+Keep an existing saved split; do not regenerate it in response to poor results. From the project directory on the login node, submit the reproduced three-epoch balanced pilot once:
 
-Local synthetic checks cover an analytic LPS coordinate ramp and known
-label bands, world-coordinate mapping, variable depth, constant images,
-absent classes, invalid labels/nonfinite MRI, affine mismatch, unchanged
-source hashes, manifest tampering/leakage, training-only file access,
-paired flip and DataLoader collation. The existing real 211-case manifest
-passes the new identity validation. The student subsequently supplied the
-real output of CPU job 699944: B006_Week0, K019_Week1 and B006_Week1 each
-passed, with image 1x64x128x128, target 6x64x128x128 and all codes 0-5
-retained. LOADER_CHECK_PASSED was printed and the displayed .err was empty.
-The detailed JSON report has not yet been downloaded for independent count
-inspection. This three-case pilot is not a full preprocessing audit or an
-accuracy test; base/apex boundary quality still needs visual evaluation.
+```bash
+sbatch baseline_balance_pilot.slurm
+squeue --me
+```
 
-## Initial 2D U-Net baseline
+For job JOBID, training artifacts are under `runs/baseline_balance_JOBID/`. After generating a fit checkpoint, a validation preview can be produced inside a compute allocation:
 
-modules.py implements the standard encoder/decoder U-Net pattern with four
-max-pool stages, two padded 3x3/ReLU convolutions per stage, transposed
-convolution upsampling, concatenated skip features, and a 1x1 six-class head.
-The initial width is 16 (16,32,64,128,256), reduced from the original paper's
-64 for this pilot. Padding keeps output size equal to input rather than
-the paper's valid-convolution cropping. H,W must be multiples of 16.
-There are no pretrained weights or extra feature extractors.
+```bash
+python predict.py --device cpu --split validation \
+    --checkpoint runs/baseline_balance_JOBID/last.pt \
+    --output runs/validation_preview_JOBID
+```
 
-The model returns logits. SoftDiceLoss applies softmax once, computes
-(2*intersection+1e-6)/(predicted_mass+target_mass+1e-6) separately for each
-class over batch/spatial axes, and returns one minus the equally weighted
-class mean. Background is included by default. Finite smoothing handles
-empty classes; this training loss is not a substitute for per-case hard
-Dice/IoU evaluation. Adam and the explicit lecture training loop are now
-implemented in train.py. The CAN3D paper's specialised DSF loss is not used here.
+The output contains a prediction NIfTI on the resized RAS grid, a prostate input/truth/prediction/error panel and a small metrics JSON. A preview subset is not a full evaluation. The saved inspection script reproduces the two reported previews using checkpoint 704488. The optional `baseline_dice_ce_pilot.slurm` launches an unverified new objective experiment and is not part of the completed results.
+
+### 6.4 Code verification and its limits
+
+Twenty-four local tests pass, using temporary synthetic fixtures. They cover coordinate/grid consistency, variable-depth handling, invalid labels/intensities, split leakage, one-hot targets, known-answer Dice/IoU, patient aggregation, finite gradients, actual small optimization runs, checkpoint reload/resumption, balanced batches, loss arithmetic and guarded test access. The test command is:
 
 ```bash
 python -m unittest -v test_dataset test_modules test_experiment
 ```
 
-All 17 local synthetic tests passed on 26 October. U-Net preserves expected
-shape and produces finite nonzero head gradients; Dice is checked against
-a hand-calculated uniform case and near-perfect/disjoint predictions.
-These are implementation checks, not trained segmentation results.
-Local validation: Python 3.12.14, PyTorch 2.14.0, nibabel 5.4.2, NumPy 2.5.3.
-Remote CUDA diagnostic: PyTorch 2.14.0+cu130, CUDA package 13.0, A100 40GB.
-Record complete remote dependency versions with the eventual training run.
+Separately, real evidence includes the full 211-pair audit, a three-case prepared-data check, an A100 CUDA check, GPU debug/fit runs and the downloaded case previews. Passing software tests verifies those checked behaviours, not segmentation quality. The student's ability to explain the code is distinct from generated tests or tutor explanations.
 
-## Baseline training, checkpoints and prediction
+## 7. Remaining work and limitations
 
-train.py now supports three explicitly separated modes. This driver currently
-supports **UNet2D only**; CAN3D still requires its own verified architecture
-and volumetric training route. No real-data model has been trained yet.
+The current evidence is limited by a small validation cohort, filename-based identity grouping, downsampled anatomy, single-seed trials, unequal pilot budgets and two inspected failure cases. The current model has failed the main prostate objective. The following results are intentionally not invented in this draft:
 
-1. **debug** fits up to three prostate-bearing slices and one empty-prostate
-   slice from the first training case. Labels select these slices only for
-   training-only debugging, not final training or evaluation. It runs Adam,
-   checks finite loss/gradients, verifies parameter changes, saves debug.pt,
-   reloads it and compares outputs. BASELINE_DEBUG_PASSED requires decreased
-   selected-training loss and successful weight reload; it does not require
-   a clinical/test Dice target and is not evidence of generalization.
-2. **fit** uses every slice from every training case. Cases and slices are
-   shuffled using seed+epoch. Each epoch evaluates complete validation
-   volumes with eval/no_grad. best.pt is selected by validation patient-macro
-   prostate Dice; last.pt includes Adam state and epoch/history for resuming.
-   There is no test-image access. Fixed learning rate 1e-3, base width 16,
-   slice batch size 8 and 30 epochs are initial configurable choices.
-3. **test** loads an already fixed fit checkpoint and evaluates every held-out
-   test volume, only with explicit --final-test. A debug checkpoint is refused.
-   Do not change the split, grid or settings in response to final test scores.
+- A validated improvement from the newly prepared Dice+CE experiment.
+- An implemented and trained CAN3D model.
+- Frozen-model test Dice/IoU and a direct 2D-versus-3D comparison.
+- Controlled full-model resource profiling and 3-5 final-model failure autopsies.
 
-Run the short, training-only GPU check first. The saved Slurm script follows
-Ed #75 (partition/account comp3710, one GPU) and uses a ten-minute time limit:
+The student reported on 28 October that the compulsory check-off was completed and that the tutor gave no specific recommendations. Final PR/Turnitin submission and any required teaching-team code-review response remain separate from the completed consultation.
 
-```bash
-mkdir -p runs
-sbatch baseline_debug.slurm
-```
+## 8. Artificial Intelligence Usage Disclosure
 
-For job JOBID, it writes runs/baseline_debug_JOBID/{config.json,history.json,
-debug_report.json,debug.pt,curves.png}. The script then runs predict.py on
-that same training case in a new process and writes previews under
-runs/baseline_preview_JOBID. Require BASELINE_DEBUG_PASSED and
-PREDICTION_PREVIEW_SAVED in its .out; inspect .err as well. The real A100
-run passed in job 700021, as shown in the student's 27 October screenshot.
-Selected-training loss decreased from 0.903778 to 0.435347 in 100 steps;
-selected-slice prostate Dice reached 0.8743. The complete B006_Week0 training-case
-preview had prostate Dice 0.2814 and reported 0.2223 seconds per case.
-The selected slices and complete volume have different evaluation scopes;
-neither result is a validation/test score or a controlled final resource benchmark.
-Parameter count was 1,940,902. Detailed saved JSON reports and Slurm accounting
-have not been inspected. Submit once, then query with squeue.
+OpenAI Codex assisted with interpreting the specification and lectures, locating references, drafting/refactoring the PyTorch data/model/training/metric code, writing synthetic tests, inspecting downloaded reports and figures, and writing this report. Codex ran the local checks and made genuine milestone commits. The student executed the authenticated Rangpur commands, submitted jobs and supplied/downloaded their outputs. This is not a claim that all code was independently written or audited by the student.
 
-The saved baseline_fit.slurm requests one GPU for a two-hour initial fit,
-using all 136 training scans and the saved validation split for 30 requested
-epochs. It never evaluates the test split. The wall-time budget is a pilot
-limit, not an estimate or guarantee that 30 epochs will finish:
+Verification included source/manifest hashes, known-answer calculations, synthetic integration tests and the real experiments described above. Unsuccessful results are retained, and generated proposals are separated from measured outcomes. The student remains responsible for reviewing and understanding every submitted component and this draft's claims before submission. No fellow-student code, previous-year PR implementation or pretrained model has been incorporated in the current baseline.
 
-```bash
-mkdir -p runs
-sbatch baseline_fit.slurm
-```
+## References
 
-Inspect runs/baseline_fit_JOBID.out and .err; checkpoints, history and curves
-are under runs/baseline_fit_JOBID/. Require BASELINE_FIT_COMPLETED before
-claiming all requested epochs finished. If interrupted, preserve both best.pt
-and last.pt for resumption into a new output directory.
+1. Ronneberger, O., Fischer, P. and Brox, T. (2015). [U-Net: Convolutional Networks for Biomedical Image Segmentation](https://arxiv.org/abs/1505.04597).
+2. Dai, W. et al. (2021). [CAN3D: Fast 3D Medical Image Segmentation via Compact Context Aggregation](https://arxiv.org/abs/2109.05443). Selected main-model reference; implementation pending.
+3. Dowling, J. and Greer, P. (2021). [Labelled weekly MR images of the male pelvis](https://doi.org/10.25919/45t8-p065). CSIRO Data Collection, version 2.
+4. Dowling et al. (2015). [Automatic Substitute Computed Tomography Generation and Contouring for MRI-Alone External Beam Radiation Therapy From Standard MRI Sequences](https://doi.org/10.1016/j.ijrobp.2015.08.045). Data were provided by HipMRI Study; non-commercial educational use and acknowledgement follow the supplied data-use terms.
+5. COMP3710 (2026). Contact 6: Neural Networks; Contact 7: ConvNets, Segmentation and Object Detection. Course teaching materials.
+6. COMP3710 (2026). Final report assessment specification v2.5, Sections 2.2-6 and Appendices A-B. [Official announcement](https://edstem.org/au/courses/38242/discussion/3600790).
+7. Teaching-team clarifications: [paper-style reporting and sources, #146](https://edstem.org/au/courses/38242/discussion/3630405); [failure-case analysis, #136](https://edstem.org/au/courses/38242/discussion/3613609); [recommendations, #214](https://edstem.org/au/courses/38242/discussion/3668050); [small result evidence, #238](https://edstem.org/au/courses/38242/discussion/3679712); [original check-off content, #193](https://edstem.org/au/courses/38242/discussion/3656727).
 
-Alternatively, **inside an appropriate compute allocation**:
+## Appendix A. Archived one-page feasibility review
 
-```bash
-python train.py --mode fit --device cuda --epochs 30 --output runs/baseline_fit_seed42
-```
+The preparation copy below is reproduced unchanged from the archived review supplied for check-off preparation. Its historical statements describe what was known then; Sections 4-7 above provide subsequent updates. The consultation was reported complete on 28 October. The original Markdown is also retained as [feasibility_review_original.md](feasibility_review_original.md), following staff guidance to keep the check-off content as a supplement.
 
-If an allocation ends after a saved epoch, resume into a new directory:
+# HipMRI feasibility review
 
-```bash
-python train.py --mode fit --device cuda --epochs 30 --resume runs/baseline_fit_seed42/last.pt --output runs/baseline_fit_resume
-```
-
-Keep best.pt beside last.pt when resuming. The previous best is retained
-even if later epochs do not improve it. Resume rejects changes to model,
-shape, saved manifest bytes, seed, learning rate and batch size. Bitwise
-reproducibility across different hardware/library versions is not assumed.
-No full fit or final test is automatically started by baseline_debug.slurm.
-
-For a validation preview, using a real fit checkpoint:
-
-```bash
-python predict.py --checkpoint runs/baseline_fit_seed42/best.pt --split validation --output runs/baseline_validation_preview
-```
-
-predict.py reloads weights, processes every slice of each selected case,
-reassembles the volume and prints hard per-class overlap metrics. It saves
-a resized-RAS NIfTI mask, prostate truth/prediction/FP-red/FN-blue panels
-at first/largest/last prostate slices, and preview_metrics.json. A preview
-subset is explicitly labelled as such; it is not a full test benchmark.
-Debug checkpoints may only preview their original training case.
-
-For final full test evaluation **after settings are fixed**, use:
-
-```bash
-python train.py --mode test --final-test --checkpoint runs/baseline_fit_seed42/best.pt --output runs/baseline_final_test
-```
-
-Hard metrics use exact whole-volume voxel counts for each of the six classes.
-If truth and prediction are both empty, that class is None and excluded from
-its mean; if only one is empty its overlap is zero. Reports include both
-scan-macro means and patient-macro means (mean scans within a patient, then
-mean patients), so frequently scanned patients do not dominate the latter.
-Soft training/validation loss and hard Dice are labelled separately. Curves
-plot training/validation losses and validation patient-macro prostate Dice.
-
-Checkpoints bind to the exact manifest file hash and record model/preprocessing
-settings, source-file hashes, dependency versions, seed, host and job ID.
-New run directories refuse overwrite. Peak memory is PyTorch allocated
-memory, not total device/context memory; debug peak is captured before
-checkpoint reload. Prediction timing covers preprocessed CPU input through
-complete-case CPU hard mask, including transfers/reassembly, excluding disk,
-metrics and plotting. CUDA preview timing includes a warm-up batch. Treat
-initial validation/debug timings as descriptive; a controlled final benchmark
-against CAN3D on identical inputs/hardware remains pending.
-
-Synthetic integration tests actually fit a tiny temporary fixture, reload
-weights, export a spatially checked NIfTI, resume training, preserve the old
-best checkpoint, and exercise final-test gates. Held-out image files are
-deliberately absent during debug/fit tests, so accidental access fails.
-Known-count Dice/IoU, empty classes and unequal patient scan counts also have
-independent expected-answer checks. Synthetic plotting samples stay private
-and are not presented as real MRI results.
-
-## First full-fit failure and controlled sampling pilot
-
-Job 703884 ran on an A100 for two hours and timed out after 25 completed
-epochs. Its downloaded config, history and latest validation JSON match the
-saved manifest, all 48 validation cases and the original source hashes.
-Each of the 25 validation prostate Dice values was exactly zero in history.
-The epoch-25 report contains:
-
-| Class | Patient-macro validation Dice | True voxels | Predicted voxels |
-|---|---:|---:|---:|
-| Background | 0.9966 | 30,185,205 | 30,147,598 |
-| Body | 0.9777 | 18,184,941 | 18,596,637 |
-| Bones | 0.9006 | 1,663,100 | 1,587,413 |
-| Bladder | 0 | 180,936 | 0 |
-| Rectum | 0 | 67,549 | 0 |
-| Prostate | 0 | 49,917 | 0 |
-
-Thus decreased mean training loss did not establish usable small-organ
-segmentation. The labels exist in every validation case, ruling out missing
-validation prostate targets as the explanation. Class/slice imbalance is a
-plausible optimization issue, not a proven sole cause. Data/preprocessing,
-prediction overlays and training coverage remain relevant diagnostic checks.
-These are validation findings, not held-out test results or final failure
-case autopsies. The timed-out run's files are retained.
-
-The next separate run changes **only training slice sampling**. The original
-`--slice-sampling all` remains the default. Optional `prostate-balanced`
-draws half of each training case's slice budget from slices with label 5
-and half without; positive slices may repeat and some other slices are not
-visited that epoch. It still reads all training cases and uses the same total
-slice budget per epoch. Interleaving guarantees 4 positive and 4 negative
-slices for the pilot's even batch size of 8 when both groups exist. If a
-case has only one group, every slice is used once. Whole-volume validation
-and final testing never use this sampling or mask-based input selection.
-
-This is a documented training adaptation to investigate the failure, not a
-claimed exact lecture recipe or a demonstrated improvement. Architecture,
-soft Dice loss, Adam learning rate, seed, grid and patient split are retained.
-Start from the same random seed in a new run; changing sampling is refused
-when resuming a different sampling configuration. For later comparison with
-CAN3D, disclose this 2D batch-composition choice and compare on identical
-whole-volume evaluation cases with clearly stated training budgets.
-
-```bash
-mkdir -p runs
-sbatch baseline_balance_pilot.slurm
-```
-
-This requests one GPU for at most 30 minutes and 3 epochs, writing logs to
-runs/baseline_balance_JOBID.out/.err and reports/checkpoints under
-runs/baseline_balance_JOBID/. It does not resume or overwrite job 703884 and
-does not access test images. New logs show training/validation phases, epoch
-duration, sampled prostate-slice counts and validation predicted voxel counts
-for every class. Inspect organ predictions and validation Dice before choosing
-a longer fit. Three epochs are a diagnostic budget, not sufficient evidence
-of convergence or a guarantee that sampling alone solves the failure.
-
-The student's log for balanced pilot 704488 shows all 3 epochs completed on
-CUDA. Each epoch drew 4,352 prostate-positive slices out of 8,704 draws,
-confirming the intended 50% sampling. Training losses were 0.588142, 0.544909
-and 0.466477; epoch times were 249.6, 244.6 and 266.1 seconds (excluding some
-checkpoint/plot overhead). Validation prostate Dice remained displayed as
-0.000000, with exactly zero predicted prostate and bladder voxels. Predicted
-rectum counts changed from 0 to 676 to 114,516 (the final count is confirmed
-by the downloaded JSON; the terminal line wrapped). The downloaded config,
-history and validation report match the saved manifest and all 48 validation
-cases. Epoch-3 patient-macro rectum Dice was 0.5600, while bladder and prostate
-Dice were exactly zero. BASELINE_FIT_COMPLETED was shown; .err has not yet
-been supplied. Three epochs do not
-establish convergence or demonstrate that this sampling change fixes the
-prostate failure. Preserve this run and inspect predictions before extending it.
-
-For one training and one validation case, baseline_inspect.slurm reloads
-the pilot's last.pt and uses CPU inference to save diagnostic masks, prostate
-truth/prediction/error panels and per-class counts. CPU is sufficient for
-these two previews; their timing is not a comparable GPU benchmark. It reads
-no test images and updates no weights:
-
-```bash
-sbatch baseline_inspect.slurm
-```
-
-The default checkpoint is runs/baseline_balance_704488/last.pt; an alternate
-can be supplied with INSPECT_CHECKPOINT. Logs are runs/baseline_inspect_JOBID
-(.out/.err); preview subfolders are runs/baseline_inspect_JOBID/train and
-/validation. Wait for BASELINE_INSPECTION_COMPLETED, then inspect the actual
-panels and metrics; a marker only confirms the commands completed.
-
-Inspection job 704533 finished both previews with an empty displayed .err.
-The downloaded PNGs were visually inspected and the prediction NIfTI/JSON
-files were received locally. B006_Week0 (training) has 1,287 true prostate
-voxels and zero predicted; C032_Week0 (validation) has 683 true and zero
-predicted. Both prostate Dice values are zero; rectum Dice values are 0.5680
-and 0.3710 respectively. Both previews record the same checkpoint SHA256.
-The displayed labels are present in the MRI panels, with no obvious global
-offset in these examples, but these previews cannot certify all anatomical
-annotations or rule out every preprocessing issue. The failure on a training
-example means this is not solely evidence of poor unseen-patient performance.
-
-The next bounded diagnostic extends the same balanced model from epoch 3
-to epoch 8 (five additional epochs), retaining Adam state, best checkpoint,
-history, split, input grid, loss, sampling and hyperparameters. It is not a
-restart and makes no claim that longer training will necessarily solve the
-prostate failure. At roughly four minutes per completed pilot epoch, the
-40-minute allocation is an upper budget; actual runtime remains variable.
-
-```bash
-sbatch baseline_balance_resume.slurm
-```
-
-The source last.pt and matching best.pt remain under
-runs/baseline_balance_704488/. New artifacts go under
-runs/baseline_balance_resume_JOBID/; logs use the same stem with .out/.err.
-Review per-class predictions and validation results before another extension.
-If prostate remains absent at epoch 8, revisit the optimization/loss diagnosis
-instead of automatically requesting another long fit. No test cases are used.
-
-All 20 local synthetic tests passed, including rare-positive batch composition,
-reproducibility, single-group fallback, real optimization/checkpoint resume,
-refusal to change sampling on resume and held-out access guards. The new
-sampling functionality has real confirmation in the pilot above; improved
-prostate segmentation has not been demonstrated.
-
-## Planned training and comparison
-
-### Loss diagnostic after the eight-epoch balanced run
-
-The student's output for continuation 708234 shows epochs 4-8 completed with
-BASELINE_FIT_COMPLETED and an empty displayed .err. Prostate and bladder
-predicted voxel counts remain zero throughout. Epoch-8 training loss is
-0.369117 and patient-macro prostate Dice is displayed as 0.000000; class
-counts are [30125668,18687976,1455803,0,62201,0]. Detailed continuation JSON
-and checkpoints have not been inspected locally. This fails the diagnostic
-criterion for simply extending the same Dice-only training recipe.
-
-Contact 6 PDF p.31 covers categorical cross-entropy and Dice; Contact 7
-PDF pp.27-28 discusses their behaviour and class imbalance. A separate
-optional `--loss dice-ce` now adds **mean pixel cross-entropy + soft Dice**,
-with coefficient 1 for each. These individual losses are course concepts;
-their sum is a documented project adaptation, not a lecturer-prescribed
-recipe or the CAN3D paper's specialised loss. It is a hypothesis about
-optimization, not a proven explanation of the real checkpoints' failure.
-No class weights, pretrained encoder or new architecture are introduced.
-
-The cross-entropy branch receives raw logits and integer labels derived
-from the aligned one-hot target; it must not receive a pre-applied softmax.
-See the [PyTorch CrossEntropyLoss documentation](https://docs.pytorch.org/docs/2.14/generated/torch.nn.CrossEntropyLoss.html).
-A known-answer numerical test demonstrates a possible saturation mode:
-when one true-prostate pixel is confidently predicted as background,
-Dice-only supplies a tiny correct-class logit gradient, whereas adding CE
-supplies a substantial corrective gradient. This example does not establish
-that the downloaded real model has exactly this internal behaviour.
-
-`baseline_dice_ce_pilot.slurm` requests one GPU for at most 30 minutes and
-three epochs, from the same seed42 initialization as the three-epoch
-balanced pilot. Only the training objective changes: split, input grid,
-architecture, optimizer, learning rate, slice sampling and number of updates
-stay fixed. No old weights are resumed or overwritten; no test images are
-accessed. Use:
-
-```bash
-sbatch baseline_dice_ce_pilot.slurm
-```
-
-Logs are runs/baseline_dice_ce_JOBID.out/.err; checkpoint/report directory
-is runs/baseline_dice_ce_JOBID/. Treat real efficacy as unverified until its
-validation results are available. The numerical loss scale changes, so a
-lower or higher number cannot be compared directly with Dice-only losses.
-Compare per-class hard validation Dice/IoU and predictions. The report keeps
-mean_soft_dice_loss separately from mean_objective_loss; curves show the
-actual objective on both training and validation. Whole-volume validation
-and per-mini-batch training still have different aggregation scopes.
-
-The default `--loss soft-dice` retains the original objective. Checkpoints
-record loss_kind; resume refuses loss changes, and old checkpoints without
-this field are interpreted as soft-dice. Test-mode loss is recovered from
-the frozen checkpoint rather than ignored CLI defaults. All 24 synthetic
-tests passed, including hand-calculated combined loss, a confidently-wrong
-gradient example, 3D empty-target finite gradients, actual combined-loss
-training/validation/resume, old-checkpoint compatibility and test-data guards.
-This verifies code behaviour, not clinical accuracy or a guaranteed remedy.
-
-Use readable PyTorch modules and the teacher's training sequence:
-model.train -> batch to device -> forward -> loss -> optimizer.zero_grad ->
-loss.backward -> optimizer.step. Validation/prediction use model.eval and
-torch.no_grad with no weight updates.
-
-The original controlled pilot uses Adam and per-class soft Dice loss for
-both models, following the segmentation lectures. Learning rate 1e-3 is a
-candidate from the course CNN example, not a verified MRI optimum. Determine
-batch size, epochs, channel widths and input grid using a small allocated-GPU
-smoke test and validation evidence. Do not perform training on login0.
-
-The later Dice+CE diagnostic above is separate; choose and justify any final
-recipe using validation evidence and apply/disclose comparable training
-choices for the eventual CAN3D comparison.
-
-The CAN3D paper uses a specialised Dice Squared Focal loss and a learning-rate
-schedule. Our initial lecture-based Dice/fixed-rate pilot is an explicit
-training adaptation, not a full reproduction of its experimental recipe.
-Any later change must be source-grounded, understood and compared on
-validation data; do not automatically add unrelated advanced methods.
-
-Keep patient split, preprocessing, loss and evaluation procedures comparable;
-record any model-specific tuning and compute budgets. Save the best validation
-prostate Dice checkpoint and use test patients only after choices are fixed.
-
-## Evaluation and required outputs
-
-- Report per-class Dice and IoU, explicitly including prostate; distinguish
-  Dice score from Dice loss. State aggregation, smoothing and empty-mask rules.
-- CAN3D's task-table target is Dice >=0.7; confirm with the tutor which class
-  aggregation is intended. Do not silently treat background accuracy as Dice.
-- Profile parameter count, peak GPU VRAM and full-case inference time on the
-  same hardware/input grid, including the full slice stack for the 2D baseline.
-- Inspect 3-5 actual failures: input, truth, prediction and false-positive/
-  false-negative overlays; discuss base/apex, inter-slice continuity and leakage.
-- Give a measured engineering recommendation and limitations. No clinical
-  performance or resource advantage is claimed before experiments.
-
-## Planned implementation
-
-| File | Responsibility |
-| --- | --- |
-| modules.py | PyTorch CAN3D and standard 2D U-Net components |
-| dataset.py | NIfTI audit/loading, patient splits, aligned preprocessing and slice views |
-| train.py | Training, validation, final evaluation, curves and checkpoint saving |
-| predict.py | Load saved weights, volume/slice inference and error visualisations |
-
-dataset.py currently implements filename-pair inventory, candidate patient
-indexing, grouped splitting, one-pair and full data-integrity auditing, and
-a publisher-labelled visual preview. Full-audit code is locally checked;
-its real 211-pair run completed successfully and its report was inspected
-locally. The real three-case preprocessing pilot also passed.
-The real filename inventory and full content audit have passed. Biological
-identity grouping still uses documented filename prefixes. Preprocessing,
-the training Dataset and baseline modules.py have synthetic checks; train.py
-and predict.py now support the tested baseline workflow. CAN3D and real-data
-baseline training remain pending. Initial remote imports are verified:
-PyTorch 2.14.0+cu130 and nibabel 5.4.2 on the CPU allocation. Full dependency
-versions and runnable training commands remain to be recorded. CUDA execution
-passed the tiny check described below. Data, weights and private audit files stay out of Git.
-Existing folder name HipMRI_CAN_s4919055 is retained; it does not determine
-model dimensionality.
-
-## GPU diagnostic preparation
-
-cuda_check.py and cuda_check.slurm implement a synthetic CUDA check, separate
-from segmentation training. The batch directives follow the updated course
-[Ed #6](https://edstem.org/au/courses/38242/discussion/3476306) and
-[Ed #75](https://edstem.org/au/courses/38242/discussion/3537106) configuration:
-partition/account comp3710, one GPU and a five-minute limit, without the
-older guide's explicit memory request.
-
-After uploading both files, submit from the remote project directory on the
-login node:
-
-```bash
-mkdir -p runs
-sbatch cuda_check.slurm
-squeue --me
-```
-
-The script reuses the existing torch environment. Logs are written under
-runs/cuda_check_JOBID.out and .err, where Slurm substitutes the job number.
-It prints CUDA/device information, then checks a synthetic16-cubed Conv3d
-forward pass and finite parameter gradients after backward. It reads no MRI,
-updates no model weights and does not estimate CAN3D accuracy or full-model
-memory requirements. Require CUDA_CHECK_PASSED in the actual job output.
-Local script/shell syntax and rejection of missing Slurm allocation or CUDA
-were checked. Real job 696947 passed on a100-8, as shown in the output
-supplied by the student on 26 October. It reported CUDA=True, A100-PCIE-40GB,
-output shape 1x2x16x16x16, finite backward gradients and CUDA_CHECK_PASSED.
-Reported peak allocation was 0.173828125 MiB for this tiny diagnostic only.
-The .err log and Slurm accounting were not supplied; no full-model resource
-or training-performance claim is inferred from this diagnostic.
-
-## Feasibility review and check-off
-
-On **28 October 2026**, the student reported completing the consultation;
-the tutor gave no specific recommendations. The following written review
-was initially prepared on 26 October and subsequently updated with evidence.
-Its proposed thresholds and compute limits are project choices, not measured
-results or guarantees. The student needs to read and understand it before
-discussing it with the tutor.
-
-### Written feasibility review
+Prepared 26 October; consultation planned 27 October 2026.
 
 **1. User Need, Scope & Acceptance Criteria**
 
@@ -819,101 +257,22 @@ Proposed acceptance targets:
 
 - All 211 image/mask pairs passed integrity checks; three real training cases passed the resized loader check.
 - A tiny A100 CUDA forward/backward test passed; baseline code passed 17 local synthetic tests.
-- GPU debug 700021 passed; the first full-fit pilot timed out after 25 epochs and missed small organs on validation. A sampling diagnostic and CAN3D remain pending.
+- GPU baseline debug job 700021 is submitted; its result is unverified. CAN3D and full training/test results remain pending.
 
 **4. Risks, Budget & Fallback**
 
 - Risks: a small prostate class, loss of boundary detail during resizing and GPU queues.
-- Next: diagnose the failed small-organ predictions, test balanced training slices, then implement CAN3D.
+- Next: inspect the 100-step baseline debug run, train the baseline, then implement CAN3D.
 - Budget: one GPU; ten-minute debug allocation, then two-hour fit pilots; eight slices per 2D batch or one volume per 3D batch.
 - Fallback: retain the tested 2D baseline. Adjust settings with validation data; use the test split only after choices are fixed.
 
 **Code and AI disclosure.** Codex assisted with course- and paper-based PyTorch code, tests and this draft.
 I ran the real-data checks and remain responsible for understanding and verifying the work.
 
-## Artificial Intelligence Usage Disclosure
+## Appendix B. Diagnostic prediction panels
 
-Codex assisted with reading the specification and published lecture PDFs,
-checking selected recording captions/frames and course code, locating papers
-and data sources, inspecting an incorrect local brain archive, explaining Git
-and Rangpur steps, and drafting/revising project documentation. On 15 October
-Codex checked the latest Blackboard sheet and revised the plan to Hard CAN3D
-at the student's request. Codex wrote the initial one-pair audit, which the
-student ran on real data and supplied as a screenshot. Codex then organised
-it into dataset.py and checked aligned/mismatched/fractional-label synthetic
-NIfTI examples locally. The student uploaded and successfully ran the saved
-file on the same real B006_Week0 pair; all four checks passed. Codex added an
-optional saved PNG preview and checked it on synthetic LPS data locally;
-real-data B006_Week0 preview generation subsequently succeeded on Rangpur;
-selected-slice visual inspection was completed. Codex retrieved the publisher
-label-description file and added its explicit mapping and citation. Codex added filename-pair inventory and tested it on synthetic
-file trees, including duplicates and missing pairs. The student subsequently
-ran the real inventory on Rangpur: 211 pairs, 38 candidate patient IDs and
-zero reported issues. The student has not independently explained or
-implemented that logic yet. Codex added seeded patient-group splitting and
-checked its correctness and overwrite protection locally. The student
-subsequently generated the real split on Rangpur: train26/136 scans,
-validation6/48, test6/27, with no prefix-group overlap. The downloaded manifest was independently inspected locally; groups/cases
-and the saved identity hash are internally consistent. Codex added full-volume integrity auditing and checked it on synthetic valid
-and damaged data locally. The student then ran the real211pair audit on
-Rangpur, reporting211passes and0failures. Codex prepared a source-grounded
-Slurm GPU diagnostic and checked local syntax/negative paths; the student
-subsequently supplied its passing A100 output for job 696947. On 26 October
-Codex added manifest validation, aligned preprocessing, the PyTorch Dataset,
-slice conversion, training-only paired augmentation, a saved loader-check
-job, the initial 2D U-Net and lecture-based soft Dice loss. Codex checked
-13 synthetic data/model tests and revalidated the real saved manifest.
-The student subsequently supplied the successful real three-case loader
-output for job 699944. Codex added the baseline Adam/debug/fit/test driver,
-checkpoint persistence/resume, metrics, reload/prediction and plots. The
-expanded 17-test suite includes actual synthetic training and safe held-out
-access tests. The student has not independently explained or implemented
-these additions. On 27 October the student supplied the passing real MRI
-GPU debug/prediction output for job 700021. Codex recorded its limited
-training-case scope and added a two-hour baseline fit Slurm script, checked
-with bash -n locally. The student ran the full-fit pilot and downloaded its
-JSON reports after the two-hour timeout. Codex checked all 25 history entries,
-per-class true/predicted counts, validation identities and source/manifest
-hashes, then added an optional balanced training-slice sampler and a separate
-three-epoch GPU pilot. The student ran that pilot and an eight-epoch
-continuation; prostate remained absent. Codex inspected the downloaded
-three-epoch reports and real training/validation PNGs/NIfTI predictions,
-then prepared a separate course-based Dice+CE objective diagnostic.
-All 24 synthetic tests passed, including loss arithmetic, gradients,
-reporting and checkpoint compatibility. The new loss has not yet been
-validated on real MRI; CAN3D remains unimplemented.
-Future entries will name actual assistance and verification, without claiming it in advance.
+These are illustrative panels from two complete-case predictions using run 704488's last checkpoint. Columns show MRI input, manual prostate mask, predicted prostate mask and false-positive/false-negative overlays. Blue indicates missed prostate; red would indicate extra prostate. Rows show first, largest and last labelled prostate levels. These examples support the preliminary analysis in Section 5.2 and do not replace the final 3-5-case investigation.
 
-## Data acknowledgement
+![Figure 3. B006_Week0 training case: all 1,287 prostate voxels missed; prostate Dice 0.](figures/B006_Week0_failure.png)
 
-Data were provided by HipMRI Study. The shared data_use_agreement.txt,
-read in the student's terminal on 15 October, requests acknowledgement and
-citation, specifies non-commercial use, and excludes attempts to identify or
-contact participants. This is an educational prototype. We cite the original
-collection and the acquisition/treatment-planning publication linked in that
-file: [Dowling et al. (2015)](https://doi.org/10.1016/j.ijrobp.2015.08.045).
-
-## References
-
-- COMP3710 final-report sheet v2.5, retrieved from the official Ed announcement
-  on 26 October 2026, especially Sections 2.2-6 and Appendices A-B.
-- Dai, W. et al. (2021), [CAN3D: Fast 3D Medical Image Segmentation via Compact
-  Context Aggregation](https://arxiv.org/abs/2109.05443), main reference [5].
-- Ronneberger, O., Fischer, P. and Brox, T. (2015), [U-Net: Convolutional
-  Networks for Biomedical Image Segmentation](https://arxiv.org/abs/1505.04597),
-  baseline reference [1].
-- Contact_6_Neural_Networks.pdf; Contact_7_ConvNets_Segmentation_Object_Detection.pdf.
-- Course [MNIST CNN notebook](https://colab.research.google.com/drive/138ORmJkYvktCRmU8TIfsin84R_p4A2iG?usp=sharing).
-- Dowling, J. and Greer, P. (2021), [Labelled weekly MR images of the male
-  pelvis](https://doi.org/10.25919/45t8-p065), CSIRO Data Collection, v2.
-
-## Submission checklist
-
-- [x] Complete compulsory feasibility check-off (student-reported on 28 October).
-- [ ] Audit real 3D images/masks and patient identity; save split manifest.
-- [ ] Implement and verify the five required files and baseline comparison.
-- [ ] Complete training, final test, resource profiling and failure analysis.
-- [ ] Keep meaningful commits at genuine milestones.
-- [ ] Finish README with reproducible commands, feasibility review and AI disclosure.
-- [ ] Open working upstream PR to topic-recognition before the actual deadline.
-- [ ] Submit README PDF via Turnitin and respond to later teaching-team review.
+![Figure 4. C032_Week0 validation case: all 683 prostate voxels missed; prostate Dice 0.](figures/C032_Week0_failure.png)

@@ -1,0 +1,13 @@
+run,completed_epoch,scope,class_id,class_name,patient_macro_dice,patient_macro_iou,true_voxels,predicted_voxels
+703884,25,48 validation scans / 6 groups,0,Background,0.9966212436500808,0.9932974939836566,30185205,30147598
+703884,25,48 validation scans / 6 groups,1,Body,0.9777020980258319,0.9565170954133686,18184941,18596637
+703884,25,48 validation scans / 6 groups,2,Bones,0.9005637774850048,0.8193781459287809,1663100,1587413
+703884,25,48 validation scans / 6 groups,3,Bladder,0.0,0.0,180936,0
+703884,25,48 validation scans / 6 groups,4,Rectum,0.0,0.0,67549,0
+703884,25,48 validation scans / 6 groups,5,Prostate,0.0,0.0,49917,0
+704488,3,48 validation scans / 6 groups,0,Background,0.9931759683824476,0.9865490063769705,30185205,30098782
+704488,3,48 validation scans / 6 groups,1,Body,0.9551417309856342,0.914554402628446,18184941,18293886
+704488,3,48 validation scans / 6 groups,2,Bones,0.7215748482202903,0.5658111554408674,1663100,1824464
+704488,3,48 validation scans / 6 groups,3,Bladder,0.0,0.0,180936,0
+704488,3,48 validation scans / 6 groups,4,Rectum,0.5599836874241889,0.3957916969949709,67549,114516
+704488,3,48 validation scans / 6 groups,5,Prostate,0.0,0.0,49917,0
