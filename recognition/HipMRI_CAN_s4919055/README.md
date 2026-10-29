@@ -1,16 +1,16 @@
 # HipMRI Prostate Segmentation: CAN3D versus a 2D U-Net Baseline
 
-Xiaotian Mao | s4919055 | COMP3710, Semester 2, 2026
+Xiaotian Mao | s4919055 | COMP3710, Semester 2, 2026 | 29 October 2026
 
-**Working report draft — completed work through 29 October 2026.** Both the 2D U-Net and CAN3D adaptation have completed eight-epoch training runs. Their validation-selected best weights are both from epoch 7 and have been independently rechecked. Final held-out testing, controlled inference profiling and the final manager recommendation remain pending.
+## Abstract
 
-**Latest verified validation results:** prostate patient-macro Dice/IoU are **0.6945/0.5356** for 2D U-Net and **0.7193/0.5709** for CAN3D. These are validation scores; the test target has not yet been established. See the [verified CAN3D continuation and failure panels](results/can3d_resume_709852.md).
+This project compares a compact CAN3D adaptation with a standard 2D U-Net for six-class pelvic MRI segmentation. On a fixed test split of 27 scans from six patient groups, validation-selected CAN3D achieves patient-macro prostate Dice 0.7762 and IoU 0.6395, versus 0.7020 and 0.5482 for U-Net. CAN3D uses fewer parameters but 2.62 times the peak allocated inference memory; U-Net performs better on the other foreground classes. Five shared test cases reveal persistent excess and missed boundaries, supporting further supervised research rather than unattended contour generation.
 
 ## 1. Problem and research question
 
-This project investigates automatic organ segmentation in pelvic MRI, with prostate segmentation as the main outcome. The intended prototype would draft contours for an imaging specialist to review. Missing a small organ can make a high average score misleading, so the investigation considers each anatomical class and visible failure cases rather than background accuracy alone.
+The task is to assign each pelvic MRI voxel to background, body, bones, bladder, rectum or prostate. A potential user is an imaging specialist who reviews draft organ contours. Small boundary errors can matter even when background overlap is high, so prostate overlap, each other class, visible failures and computational cost are evaluated separately.
 
-The planned comparison asks whether CAN3D's volumetric context improves prostate boundaries and continuity enough to justify its memory and inference cost compared with a standard 2D U-Net. The completed work establishes the data pipeline, trains both models and investigates small-organ failures. The final test and controlled cost comparison are still needed to answer the deployment question. The planned acceptance criteria are preserved in Appendix A; they are targets, not achieved results.
+The research question is whether whole-volume context in CAN3D improves prostate segmentation enough to justify its cost compared with slice-wise U-Net. The course Hard route specifies a prostate test Dice target of at least 0.70 [6]. Meeting this numerical target is evidence about this experiment, not clinical readiness or a guarantee of marks. The original feasibility criteria are preserved unchanged in Appendix A.
 
 ## 2. Dataset and preprocessing
 
@@ -46,245 +46,273 @@ The split was generated with seed 42. All weeks from the same filename prefix re
 
 Each aligned MRI/mask pair is reoriented to RAS, and array axes are converted from NIfTI X,Y,Z to PyTorch depth,height,width. Each MRI is standardized using its own mean and population standard deviation, with a small denominator clamp for constant images. There are no pooled validation/test normalization statistics.
 
-The complete field of view is resized to 64 x 128 x 128 voxels. MRI intensities use trilinear interpolation; masks use nearest-exact interpolation on the corresponding voxel-centre grid, retaining integer labels. Masks become six-channel one-hot targets. The output affine and original geometry are retained. This is a fixed voxel shape, **not common physical voxel spacing**. Resizing can remove fine boundary detail, especially for small organs. No label-guided crop is used for inference. The optional paired-flip augmentation is disabled in the reported runs.
+The complete field of view is resized to 64 x 128 x 128 voxels. MRI intensities use trilinear interpolation; masks use nearest-exact interpolation on the corresponding voxel-centre grid, retaining integer labels. Masks become six-channel one-hot targets. The output affine and original geometry are retained. This is a fixed voxel shape, **not common physical voxel spacing**. Resizing can remove fine boundary detail, especially for small organs. No label-guided crop is used for inference. The 2D baseline uses no augmentation; CAN3D applies training-only paired left/right flips, described below. Validation and test are never augmented.
 
-## 3. Implemented model and evaluation
+## 3. Models and course-based training
 
-### 3.1 Standard 2D U-Net baseline
+### 3.1 2D U-Net baseline
 
-The implemented network follows the encoder-decoder and concatenated skip-connection design of U-Net [1]. Four encoder levels extract features using two padded 3 x 3 convolutions with ReLU, followed by 2 x 2 pooling. A bottleneck is followed by four decoder levels using transposed convolutions, concatenated encoder features and two convolutions. A 1 x 1 output convolution produces six raw class logits per pixel.
+The baseline follows U-Net's encoder-decoder structure with concatenated skip connections [1]. Four encoder stages each contain two padded 3x3 convolutions and ReLU, then 2x2 pooling. Channel widths are 16, 32, 64 and 128, with a 256-channel bottleneck. The decoder uses 2x2 transposed convolutions, matching encoder features and two convolutions at each level. A 1x1 head returns six raw logits. Padding avoids the original paper's valid-convolution cropping; reduced width is an explicit project adaptation. There are 1,940,902 trainable parameters and no pretrained weights.
 
-The initial channel width is 16, giving encoder/bottleneck widths 16,32,64,128,256. This reduces the original paper's channel count. Padded convolutions preserve dimensions rather than reproduce the original valid-convolution cropping. The network has **1,940,902 trainable parameters** and uses no pretrained weights. Each 3D case is processed slice by slice; all predictions are reassembled before case-level evaluation. The local CAN3D prototype is described in Section 3.4. The trained CAN3D model has verified validation results in the linked supplements, but no final test result.
+![Figure 1. Implemented 2D U-Net structure. Predictions from all slices are reassembled before volume-level evaluation.](figures/unet2d_architecture.png)
 
-![Figure 1. Implemented U-Net structure; all shown blocks are present in modules.py.](figures/unet2d_architecture.png)
+### 3.2 CAN3D adaptation
 
-### 3.2 Training and checkpoint selection
+`can3d.py` implements the one-downsampling option described in the CAN3D methods [2]. A 1-to-8 stem feeds a stride-2 projection to 36 channels. Four context blocks use dilations 2, 4, 8 and 1, with the last expanding to 48 channels. A transposed convolution upsamples to eight channels; an eight-channel 1x1 shortcut is added before a 1x1 six-class head. Dilated convolutions enlarge the receptive field without repeated pooling; the shortcut retains higher-resolution features. The network has 170,342 trainable parameters.
 
-Reported experiments use Adam with learning rate 0.001, a slice batch size of 8 and seed 42. The original loss is one minus the equally weighted mean soft Dice over six classes, including background. Softmax is applied inside the loss. Smoothing is 1e-6. The training loop performs forward prediction, loss calculation, gradient clearing, backpropagation and an optimizer step, following the course workflow [5]. Validation uses evaluation mode with no gradient updates.
+Each block applies convolution, learned scalar blending `a*x + b*InstanceNorm(x)`, and LeakyReLU(0.1). Initial a=1,b=0, non-affine instance normalization with epsilon 1e-5, shortcut/output widths and transposed-convolution padding are declared project choices. Ordinary kernels use Xavier uniform initialization; context kernels use centre-tap identity initialization, with extra output channels zeroed. The head returns raw logits.
 
-`best.pt` is selected by validation patient-macro prostate Dice. `last.pt` retains the current weights, Adam state, completed epoch and history. Resumption preserves the earlier best checkpoint and refuses incompatible settings. With zero prostate Dice at every epoch, the retained best can be the earliest checkpoint; therefore the diagnostic prediction panels use `last.pt` from the three-epoch balanced run.
+The paper's Figure 2 shows a different two-downsampling, 3/6/36/48-channel variant. This implementation uses the methods-text 8/36/48-channel option for the smaller input volume and is not an exact Figure 2 reproduction. It also does not reproduce the paper's specialized DSF objective or scheduler. These adaptations are explicit to avoid attributing published-paper accuracy to this code.
 
-### 3.3 Metrics and safeguards
+![Figure 2. Implemented one-downsampling CAN3D. Spatial dimensions halve once and return to the full resized input grid.](figures/can3d_architecture.png)
 
-For each class, hard predictions are compared with the full reassembled volume:
+### 3.3 Loss, optimization and data sampling
+
+Both final recipes use Adam at learning rate 0.001 and seed 42. The forward-loss-zero-grad-backward-step workflow, convolution, skip connections, Dice and categorical cross-entropy follow Contact 6/7 concepts [5]. The combined objective is a project choice:
+
+```text
+soft_Dice_c = (2 sum(p_c * y_c) + 1e-6) / (sum(p_c) + sum(y_c) + 1e-6)
+loss = (1 - mean_over_six_classes(soft_Dice_c)) + mean_cross_entropy
+```
+
+Dice is equally weighted across six classes, including background. Cross-entropy receives raw logits and integer class targets; both loss terms have coefficient 1. There are no class weights, pretrained models or test-dependent post-processing rules.
+
+| Setting | 2D U-Net | CAN3D |
+|---|---|---|
+| Training input | Individual axial slices | Complete resized volumes |
+| Batch size | 8 slices | 1 volume |
+| Sampling per epoch | 8,704 draws; 4,352 prostate-positive | All 136 training volumes |
+| Optimizer steps per epoch | 1,088 | 136 |
+| Augmentation | None | Paired image/mask left-right torch.flip, probability 0.5 |
+| Completed epochs / selected epoch | 8 / 7 | 8 / 7 |
+
+Balanced slice sampling gives small-organ slices more opportunities to contribute; it does not alter validation or test membership. CAN3D flips only during training and updates spatial metadata consistently. The different sampling, augmentation and update counts mean this is a comparison of two implemented recipes, not an architecture-only ablation.
+
+### 3.4 Validation, resumption and test freeze
+
+`best.pt` is selected by patient-macro validation prostate Dice; `last.pt` retains weights, Adam state, history and epoch. Resume guards reject incompatible model, split, grid, loss, learning rate, sampling and augmentation settings. Earlier best weights survive resumption. Both selected epoch-7 models were independently revalidated on all 48 validation scans: U-Net Dice/IoU 0.6945/0.5356; CAN3D 0.7193/0.5709. Epoch-8 metrics were not substituted for the selected checkpoints.
+
+The committed [final evaluation plan](final_evaluation_plan.json) fixed the two checkpoint hashes, original patient split, input grid and profiling settings before test scores were read. Job 710105 evaluated both fixed models without parameter updates. The test set is not used for further tuning. Historical baseline sources were checked against preserved revision 50e8ee7; the newer evaluation source hashes are recorded separately in the frozen plan.
+
+## 4. Experimental design and metrics
+
+### 4.1 Quantitative protocol
+
+Hard argmax predictions are compared against complete reassembled reference volumes on the same resized RAS grid. For each class:
 
 ```text
 Dice = 2 TP / (2 TP + FP + FN)
 IoU  = TP / (TP + FP + FN)
 ```
 
-If both prediction and truth are empty, that class is recorded as missing and excluded from its mean; if only one is empty, its score is zero. Scores are averaged over scans within each patient and then equally over patients. This prevents frequently scanned patients dominating the main result. Scan-macro scores are also stored. The test driver requires explicit final-test authorization and a fixed fitted checkpoint; it has not been run on real test data.
+If prediction and reference are both empty, the class is missing and excluded from its mean; if only one is empty, the score is zero. The primary metric first averages scans within each patient, then equally averages patients. This prevents repeated weeks dominating the comparison. Scan-macro metrics and individual cases are also saved. There are only six held-out groups and one training seed; no statistical significance claim is made.
 
-### 3.4 CAN3D adaptation and course-based training
+### 4.2 Controlled inference cost measurement
 
-`can3d.py` implements the methods-text one-downsampling variant of CAN3D [2]: 1-to-8 stem, stride-2 projection to 36 channels, context dilations 2/4/8/1 with 48 latent channels, transposed upsampling and an element-wise shortcut sum before six class logits. Each block uses convolution, learned identity/instance-normalization blending and LeakyReLU(0.1). Context kernels start with center-tap identity mappings; ordinary kernels use Xavier uniform initialization. The prototype has **170,342 parameters**.
+Both models run in separate processes in one allocation on `a100-8`, an NVIDIA A100-PCIE-40GB, with one CPU thread and deterministic cuDNN policy. CAN3D runs first, U-Net second. Each test case has two warmups and three measured repetitions; predictions agree across repetitions. The table reports the mean across cases of each case's median time. No data loading or plot generation occurs within a timed repetition.
 
-The paper's Figure 2 instead illustrates a two-downsampling variant with 3/6/36/48 channels. Our smaller resized input uses the one-downsampling option described in the methods, not an exact reproduction of that diagram. The 8-channel shortcut/upsampling output, transposed-convolution padding, initial normalization weights (a=1,b=0) and non-affine instance normalization are explicit implementation choices. Outputs are raw logits because the loss handles softmax internally.
+Timing starts with an already preprocessed CPU tensor and ends with a complete CPU hard mask. It includes host/device transfers, model execution, slice reassembly and CPU argmax, and excludes disk access, preprocessing, metric computation and figures. CUDA is synchronized around measurements. Peak allocated and reserved values are PyTorch memory statistics after warmup, including model and inference tensors but excluding driver/context and other processes. They are not total GPU-board usage.
 
-The initial planned recipe uses the same saved patient split, preprocessing, Adam learning rate 0.001 and unit-weight Dice+CE ingredients as the successful baseline, but processes one whole resized volume per update. It does not reproduce the paper's specialized DSF objective, scheduler or augmentation. These differences and the different update counts must remain visible in the final comparison. Three architecture tests passed for initialization, normalization, full-volume shapes, finite gradients and an optimizer update. The shared `train.py` and `predict.py` now support whole-volume CAN3D checkpoints. A further synthetic integration test covers fitting with training-only paired left/right torch.flip (probability 0.5), exact resumption versus uninterrupted fitting, validation, prediction-grid export and explicit test gating. This does not constitute a real-data accuracy measurement.
+## 5. Results
 
-GPU smoke job 709556 completed five steps on one repeated training volume (two warmup, three measured), reporting peak allocated memory 909.998 MiB and median measured step time 0.05695 s; stdout showed CAN3D_SMOKE_PASSED and displayed stderr was empty. These diagnostic values were subsequently verified against the downloaded smoke JSON and its preserved source revision. The timing excludes file loading and does not measure a full epoch, convergence or a controlled 2D/3D benchmark.
+### 5.1 Training investigation
 
-The prepared `can3d_pilot.slurm` trains three epochs on all 136 training volumes and validates on all 48 validation scans each epoch, preserving best/last checkpoints and Adam state in a new output directory. It uses batch size 1, Adam 0.001, seed 42 and Dice+CE. Training-only paired left/right flips have probability 0.5; the old baseline used no flips, balanced slice sampling and more updates per epoch. These are different training recipes, so any performance difference cannot be attributed solely to 3D context without a matched control. Validation/test preprocessing and patient assignments remain the same. The 30-minute allocation is a cap, not an estimated training time. The first trial completed with prostate validation Dice 0.6744 and IoU 0.5123; the [verified pilot supplement](results/can3d_pilot_709710.md) contains all class metrics, inspected cases and limitations. The completed continuation through epoch 8 selected epoch 7 (validation prostate Dice 0.719317, IoU 0.570924); full class metrics and inspected cases appear in the [continuation supplement](results/can3d_resume_709852.md).
+The initial all-slice Dice-only U-Net reached 25 epochs before its two-hour allocation timed out; validation prostate Dice remained zero. A three-epoch balanced-slice Dice-only trial also gave zero prostate Dice. Adding cross-entropy in a fresh matched three-epoch balanced trial raised prostate validation Dice to 0.6243. The architecture, initialization seed, split, grid, batch and sampling matched the three-epoch Dice-only trial, so this pilot supports the added objective term as useful here. It does not prove a unique cause for the earlier collapse or generalize across seeds. A later Dice-only continuation still had zero prostate Dice at epoch 8, supporting the decision to inspect the objective rather than only train longer.
 
-## 4. Experiments completed so far
+The final Dice+CE U-Net and CAN3D runs both completed eight epochs. The validation-selected epoch is 7 for each. Historical validation tables and curves remain in [results/validation_summary.csv](results/validation_summary.csv) and [results/learning_history.csv](results/learning_history.csv); detailed continuation evidence is linked in the evidence index.
 
-| Run | Experiment | Completed work | Main observation |
-|---|---|---:|---|
-| 700021 | Short training on selected slices | 100 steps | Training/reload and prediction checks passed |
-| 703884 (A) | All training slices, Dice loss | 25 of 30 | Two-hour timeout; validation prostate Dice stayed zero |
-| 704488 (B) | Balanced training slices, Dice loss | 3 | Rectum learned partially; bladder/prostate predictions absent |
-| 708234 (C) | Continue B with the same settings | 4-8 | Completed; bladder/prostate predictions still absent |
-| 708618 (D) | Balanced slices, Dice + cross-entropy | 3 | Prostate validation Dice reached 0.6243 |
-| 709041 (E) | Continue D without changing the recipe | 4-8 | Best epoch 7: prostate Dice 0.6945; epoch 8: 0.6060 |
-| 709282 | Re-evaluate fixed E best checkpoint | 48 validation scans | Epoch 7, matching checkpoint hash and score; three case panels |
+![Figure 3. Complete final-recipe training histories and validation prostate Dice. Stars show selected epoch-7 weights. Test values were not used to select an epoch.](figures/final_learning_curves.png)
 
-Run A visits every training slice once each epoch. Runs B/C use all 136 training cases but draw half of each case's slice budget from slices containing prostate and half from slices without it. Positive slices may repeat, and not every original slice is visited that epoch. With batch size 8, interleaving gives four positive and four negative slices when both groups exist. The fallback for a case with only one group is to use every slice once. Validation always uses complete volumes. Each balanced epoch recorded 4,352 positive slices among 8,704 draws.
+### 5.2 Final held-out accuracy
 
-These experiments investigate training failure, rather than provide a final controlled model comparison. Run A has 25 epochs and the fully downloaded B report has 3; their different budgets and sampled training distributions limit causal conclusions. Run C preserves B's training recipe and adds five epochs. Its numbers here come from the student's terminal output; its detailed JSON report has not yet been downloaded.
+All 27 scans from the original six test groups were evaluated for both models. Values below are patient-macro means, not training or validation scores.
 
-Runs B and D provide a matched three-epoch objective comparison. Both use the same architecture, initial seed, input shape, fixed split, balanced sampling, batch size and Adam learning rate. D adds mean per-pixel categorical cross-entropy to soft Dice, with coefficient 1 for each. Both ingredients are covered in Contact 6/7; their sum is a project adaptation. The architecture and original Dice code were checked to be unchanged, and D's recorded source hashes were verified against the preserved baseline code (commit 50e8ee7); later CAN3D driver integration is a separate code change. Both devices are A100-PCIE-40GB GPUs, on different nodes. This is a single-seed pilot comparison, not a statistical guarantee across runs.
+| Class | U-Net Dice | CAN3D Dice | U-Net IoU | CAN3D IoU |
+|---|---:|---:|---:|---:|
+| Background | 0.9952 | 0.9952 | 0.9905 | 0.9905 |
+| Body | 0.9766 | 0.9716 | 0.9543 | 0.9447 |
+| Bones | 0.8680 | 0.8195 | 0.7671 | 0.6948 |
+| Bladder | 0.9029 | 0.8615 | 0.8269 | 0.7647 |
+| Rectum | 0.7903 | 0.7204 | 0.6576 | 0.5663 |
+| Prostate | 0.7020 | 0.7762 | 0.5482 | 0.6395 |
 
-![Figure 2. Left: Dice-only training curves A/B/C. Right: prostate validation Dice including D. A/B/D use downloaded JSON; C uses terminal output. Losses across sampling distributions or objectives should not be directly compared.](figures/learning_curves.png)
+CAN3D improves prostate Dice by 0.0742 (7.42 percentage points), exceeding the Hard route's 0.70 target under the declared aggregation. U-Net has higher Dice and IoU for body, bones, bladder and rectum. The unweighted mean Dice across labels 1-5 is 0.8480 for U-Net and 0.8298 for CAN3D. Thus a prostate advantage does not establish general superiority across pelvic structures.
 
-The short debug run reached prostate Dice 0.8743 on a few selected training slices, but its complete training-case preview scored 0.2814. These different scopes demonstrate why a selected-slice debug score cannot serve as a validation or test result.
+At patient level, CAN3D has higher prostate Dice in five of six groups; J026 is an exception (0.7253 versus U-Net 0.7686). The remaining group pairs (CAN3D/U-Net) are K008 0.7564/0.6071, S028 0.7882/0.7038, T009 0.8493/0.7803, T014 0.6886/0.5888 and V027 0.8493/0.7634. A single high aggregate must not hide that variation. Full precision class and case values are in the linked result CSVs.
 
-## 5. Preliminary results and analysis
+### 5.3 Resource trade-off
 
-### 5.1 Per-class whole-volume validation
-
-The following patient-macro results cover the same 48 validation scans from six groups. A is the last completed epoch 25; B and D are epoch 3. They are preliminary validation results, not final test scores or a CAN3D comparison.
-
-| Class | A Dice | A IoU | B Dice | B IoU | D Dice | D IoU |
-|---|---:|---:|---:|---:|---:|---:|
-| Background | 0.9966 | 0.9933 | 0.9932 | 0.9865 | 0.9953 | 0.9906 |
-| Body | 0.9777 | 0.9565 | 0.9551 | 0.9146 | 0.9624 | 0.9279 |
-| Bones | 0.9006 | 0.8194 | 0.7216 | 0.5658 | 0.7307 | 0.5774 |
-| Bladder | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.7137 | 0.5880 |
-| Rectum | 0.0000 | 0.0000 | 0.5600 | 0.3958 | 0.5684 | 0.4045 |
-| Prostate | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.6243 | 0.4602 |
-
-In A, the model predicted only background, body and bones. The validation truth contained 49,917 prostate voxels, but the prediction contained zero. Bladder and rectum were also completely omitted. Thus falling overall training loss did not establish useful small-organ segmentation.
-
-In B, rectum Dice reached 0.5600, with 114,516 predicted rectum voxels against 67,549 true voxels. This indicates partial overlap, with substantial errors still present. Prostate and bladder predictions remained empty. At epoch 8 in C, prostate Dice was still displayed as 0.000000 and predicted prostate voxels were zero. More epochs and balanced slices alone did not resolve that failure.
-
-In D, prostate Dice increased from 0.3704 to 0.4375 to **0.6243**, with epoch-3 IoU 0.4602. Bladder Dice reached 0.7137 and rectum Dice 0.5684. Prostate predictions totalled 74,738 voxels against 49,917 true voxels, so nonempty output is not evidence of accurate boundaries or absence of over-segmentation. The matched B/D comparison supports the additional CE term as a useful change in this pilot; it does not prove one sole mechanism behind the earlier failures. Small targets, downsampling and optimization remain relevant limitations.
-
-![Figure 3. Verified Dice+CE history through epoch 8 (708618 then 709041); epoch 7 was selected by validation Dice and rechecked in 709282.](figures/dice_ce_learning_curves.png)
-
-Cross-entropy receives raw logits and integer class labels, while the Dice term uses softmax probabilities. Since the combined objective has a different numerical scale, its loss should not be compared directly with Dice-only loss. The validation report preserves both the combined objective and soft Dice loss separately. The promising validation result is not a final test result or evidence that the planned model target has been achieved.
-
-The continuation E retained the saved weights and Adam state from D. Prostate validation Dice for epochs 4-8 was 0.6454, 0.5940, 0.6627, **0.6945**, 0.6060. Training loss kept falling, but validation overlap did not improve monotonically. The last epoch therefore must not replace the validation-selected best checkpoint. This short history does not establish a sole cause of the fluctuations.
-
-Job 709282 reloaded the unchanged best checkpoint, confirmed epoch 7 and reproduced its score on the same 48 validation scans. All class metrics below belong to **that same epoch-7 checkpoint**; they must not be mixed with the epoch-8 latest report. Its SHA256 is `094deac975b46ecd9c0fa497d9581fd188d120bd34c318b9897e6bf3239a303c`. The epoch-7 prostate prediction totals 61,897 voxels against 49,917 truth voxels. Per-case results were independently re-aggregated by patient.
-
-| Class | Best epoch-7 Dice | Best epoch-7 IoU |
+| Resource, same final test allocation | 2D U-Net | CAN3D |
 |---|---:|---:|
-| Background | 0.9945 | 0.9891 |
-| Body | 0.9733 | 0.9482 |
-| Bones | 0.8413 | 0.7273 |
-| Bladder | 0.8235 | 0.7154 |
-| Rectum | 0.7615 | 0.6211 |
-| Prostate | 0.6945 | 0.5356 |
+| Trainable parameters | 1,940,902 | 170,342 |
+| Peak PyTorch allocated inference memory, MiB | 74.928 | 196.663 |
+| Peak PyTorch reserved inference memory, MiB | 92.0 | 282.0 |
+| Mean of per-case median inference time, seconds | 0.21961 | 0.21060 |
 
-### 5.2 Observed error cases
+CAN3D has about 91.2% fewer parameters but uses 2.62 times the allocated inference memory, because parameter count does not describe full volumetric activation storage. It is about 4.1% faster on the measured CPU-input-to-CPU-mask path in this allocation; no general speed advantage or GPU-compute-only comparison is inferred. Fixed process order and caching also limit this comparison. Both peaks are well below the original 35 GiB feasibility budget. Historical training peaks and epoch times are different quantities and are not mixed into this inference table.
 
-The downloaded prediction panels and NIfTI counts agree. Both examples use the same failed Dice-only epoch-3 checkpoint from B and the resized RAS grid; see Appendix B. They are historical diagnostic failures, not predictions from D, and **not the completed requirement for 3-5 representative final-model failures**. Three current best-checkpoint validation cases are analysed below and illustrated in Appendix C.
+## 6. Five shared failure-case autopsies
 
-**Training case B006_Week0:** the manual prostate contains 1,287 voxels and the model predicts none. Prostate Dice is zero; rectum Dice is 0.5680. The displayed first, largest and last labelled prostate slices are all missed. Because an already-seen training case fails too, this cannot be explained solely as poor performance on a new patient.
+Cases are the lowest prostate-Dice CAN3D scan from each of five different test groups, selected by a rule fixed before testing; U-Net uses the identical cases. They are low relative to other CAN3D test cases, not all complete segmentation failures. Counts below cover the entire resized 3D volume, so they are not counts from only the displayed slices.
 
-**Validation case C032_Week0:** the manual prostate contains 683 voxels and the prediction again contains none. Prostate Dice is zero; rectum Dice is 0.3710. The complete omission also affects the largest labelled prostate slice, so the problem is broader than a small boundary discrepancy on an extreme slice.
+| Test case | U-Net Dice | CAN3D Dice | U-Net FP / FN | CAN3D FP / FN |
+|---|---:|---:|---:|---:|
+| T014_Week3 | 0.5049 | 0.6102 | 823 / 40 | 570 / 19 |
+| J026_Week6 | 0.7047 | 0.6340 | 548 / 11 | 686 / 45 |
+| K008_Week0 | 0.6071 | 0.7564 | 361 / 545 | 358 / 270 |
+| S028_Week0 | 0.7038 | 0.7882 | 517 / 292 | 435 / 155 |
+| V027_Week6 | 0.7452 | 0.8044 | 330 / 206 | 205 / 186 |
 
-The panels show visible annotations at MRI locations with no obvious global offset in these examples. This is a limited visual check, not proof that all annotations or preprocessing are correct. Blue overlays show false negatives. The first/last labelled slices are not assigned clinical base/apex labels without further anatomical verification. No case was selected from the final test set.
+The panels show the first, largest-reference-area and last labelled prostate slices. The same reference-centred display window is used for both models to make boundaries readable; this is visualization after full-volume inference, not label-guided model cropping. Full-field panels are linked for each case. First/last labelled levels are proxies for terminal boundary inspection, not independently confirmed clinical base/apex labels. Red is false positive and blue is false negative.
 
-The current cases were selected reproducibly by lowest prostate Dice, taking one scan from each of three distinct validation patient groups. They illustrate error modes; they are not a random sample or final test cases. Full-volume TP/FP/FN counts below were recovered from the exact overlap/count records, while the panels show first, largest and last labelled slices.
+### 6.1 T014_Week3: Excess contour across small and central sections
 
-**C032_Week0: excess prediction at small extents.** Dice 0.5321, IoU 0.3625; 683 true versus 1,749 predicted voxels, with TP/FP/FN = 647/1,102/36. The first/last displayed slices have much larger predicted masks than their small labels; the central slice has both excess and missed regions. Most error volume is false positive. A plausible trigger is uncertain small-organ extent after resizing, but this is a hypothesis rather than a proven anatomical diagnosis.
+CAN3D predicts 1,031 prostate voxels against 480 reference voxels; 570 are false positives. Red surrounds the small first labelled slice (z31), the largest slice (z37) and terminal slice (z40). U-Net is still more expansive (823 FP), but CAN3D has not solved the over-contouring failure.
 
-**D031_Week6: high coverage with an oversized contour.** Dice 0.5932, IoU 0.4217; 512 true versus 1,167 predicted voxels, TP/FP/FN = 498/669/14. The largest displayed slice covers most of the label but adds a surrounding region; the last labelled slice also shows excess prediction. Missing voxels are few over the full case, so further reducing false negatives alone would not address its main failure.
+A small target with coarse resized boundaries is consistent with these errors; similar-looking neighbouring tissue may also contribute, but the images do not establish its identity or causality. Review all terminal contours manually. Future work should assess a higher-resolution grid and per-slice boundary errors on development data and a new held-out cohort.
 
-**K018_Week0: substantial under-segmentation.** Dice 0.5991, IoU 0.4277; 1,349 true versus 931 predicted voxels, TP/FP/FN = 683/248/666. The larger and last displayed labelled slices show a smaller predicted region with broad blue missed areas. This opposite error mode means a blanket shrinking of every prediction to fix the first two cases could worsen this case. Slice-wise context limitations, contrast and resolution loss are candidate triggers; comparing 3D context under the same split is a planned investigation, not a measured improvement.
+![Figure 4. T014_Week3, shared slice positions and display window; MRI, reference, CAN3D prediction/errors, U-Net prediction/errors.](figures/final_compare_T014_Week3.png)
 
-The three-case inspection supports retaining patient-specific boundary analysis alongside mean overlap. It does not prove label noise, establish clinical base/apex identity, or complete the remaining CAN3D/final-model assessment.
+Full-field panels: [CAN3D](figures/final_can3d_T014_Week3.png), [2D U-Net](figures/final_unet2d_T014_Week3.png).
 
-### 5.3 Resource observations
+### 6.2 J026_Week6: A counterexample to a universal 3D benefit
 
-| Measurement | Observation | Scope and limitation |
-|---|---|---|
-| U-Net parameters | 1,940,902 | Implemented 2D model |
-| Peak training allocation | A/B: 167.34 MiB; D: 166.71 MiB | PyTorch allocation; excludes driver/context and other device memory; small differences do not establish a memory advantage |
-| A100 complete-case preview | 0.2223 s (debug); 0.2216 / 0.2264 s (best model) | Individual training/validation previews; no disk/plot time; not repeated benchmark |
-| CPU complete-case previews | 2.6096 / 1.7711 s | Two diagnostic cases, run 704533; different device/checkpoint |
-| CAN3D diagnostic | 170,342 parameters; 910.00 MiB; median 0.05695 s/step | Five repeated training-case steps, 709556 screenshot; excludes loading, not a full-epoch or controlled model benchmark |
+CAN3D Dice is 0.6340, below U-Net 0.7047. The first labelled slice has both missed and excess regions; the final labelled slice z30 is enlarged. CAN3D has 686 FP and 45 FN, versus U-Net 548 FP and 11 FN. A six-neighbour 3D component count finds a 1,312-voxel main CAN3D component and seven isolated predicted voxels; U-Net has components of 1,183, 16, 15 and 1 voxels. Small predicted islands are an additional failure pattern; no component filtering was applied.
 
-The A100 observations were obtained on an NVIDIA A100-PCIE-40GB. These are descriptive diagnostic measurements. They do not constitute repeated, controlled latency measurements or comparable 2D/3D resource profiling. The tiny CUDA check's 0.174 MiB allocation is excluded because it did not run the U-Net. CPU preview times must not be compared directly with A100 timings to claim a model advantage.
+Volumetric context can propagate an overly broad contour instead of correcting it. Local appearance and the different training recipes are plausible contributors, not proven mechanisms. This scan remains unsuitable for unattended drafting; investigate terminal extent and shape consistency before any deployment study.
 
-### 5.4 Engineering recommendation at this stage
+![Figure 5. J026_Week6, shared slice positions and display window; MRI, reference, CAN3D prediction/errors, U-Net prediction/errors.](figures/final_compare_J026_Week6.png)
 
-**Do not deploy the current prototype for automatic prostate contour drafting.** Dice+CE has recovered prostate predictions and is a promising baseline recipe, but best mean validation Dice 0.6945 on six groups is not sufficient evidence for reliable contours. Its boundaries, error cases and fixed-model test performance still need examination. Retain the verified data pipeline and failed-run evidence, retain the inspected error examples and compare the selected baseline with the planned 3D model. Any later usable prototype would still require specialist review.
+Full-field panels: [CAN3D](figures/final_can3d_J026_Week6.png), [2D U-Net](figures/final_unet2d_J026_Week6.png).
 
-The selected CAN3D epoch-7 model has validation prostate Dice 0.719317, compared with 0.694518 for the selected 2D epoch-7 model. Different recipes and budgets prevent a sole-architecture interpretation; these pilot results do not establish an accuracy or efficiency advantage for CAN3D. A final recommendation between 2D and 3D must wait for the frozen test comparison, comparable resource measurements and test failure-case analysis. The selected Hard route and target Dice are not achieved by selecting the model name or by passing a GPU smoke test.
+### 6.3 K008_Week0: Missed small terminal section and displaced boundaries
 
-## 6. Implementation, reproducibility and verification
+The first labelled slice z28 is severely under-predicted by CAN3D and missed by U-Net. At z36 both models show red/blue bands rather than exact boundary agreement. CAN3D reduces full-volume FN from 545 to 270, with similar FP (358 versus 361), explaining the Dice increase without implying that terminal coverage is reliable.
 
-### 6.1 Code organization
+This pattern is consistent with a small cross-section and loss of detail during resizing. No global MRI/mask misalignment was found in the file audit, but subtle annotation uncertainty was not independently adjudicated. Future evaluation should retain more spatial detail and measure terminal-slice misses; human review remains necessary.
 
-| File | Implemented responsibility |
+![Figure 6. K008_Week0, shared slice positions and display window; MRI, reference, CAN3D prediction/errors, U-Net prediction/errors.](figures/final_compare_K008_Week0.png)
+
+Full-field panels: [CAN3D](figures/final_can3d_K008_Week0.png), [2D U-Net](figures/final_unet2d_K008_Week0.png).
+
+### 6.4 S028_Week0: A reasonable whole-volume Dice hides local boundary displacement
+
+Despite CAN3D Dice 0.7882, the first slice z28 has excess and missed regions; z36 shows opposing red/blue boundary bands, and the last labelled slice z41 is poorly matched. U-Net has a larger missed central region and a visibly enlarged terminal prediction. CAN3D improves FN (155 versus 292) while retaining 435 FP.
+
+A large central overlap can dominate the volume score while small end sections remain wrong. Resizing and local contrast are hypotheses rather than measured causes. Do not accept the contour solely because its case Dice is near 0.8; inspect terminal slices and add surface/extent checks in a later independently evaluated study.
+
+![Figure 7. S028_Week0, shared slice positions and display window; MRI, reference, CAN3D prediction/errors, U-Net prediction/errors.](figures/final_compare_S028_Week0.png)
+
+Full-field panels: [CAN3D](figures/final_can3d_S028_Week0.png), [2D U-Net](figures/final_unet2d_S028_Week0.png).
+
+### 6.5 V027_Week6: Residual terminal errors even above Dice 0.80
+
+CAN3D Dice 0.8044 is higher than U-Net 0.7452, yet z25 is partly missed and the final labelled slice z37 is substantially over-predicted by both models. The central z31 overlap is much stronger. CAN3D has fewer FP (205 versus 330) but still 186 FN, so a favourable case score does not mean an exact contour.
+
+Small terminal areas contribute little to the full-volume overlap but are visible failure points. The present pipeline has no validated uncertainty rejection or extent constraint. Flag small end sections for manual correction; any future post-processing must be tuned on development data and tested on new patients, not retrofitted to these test cases.
+
+![Figure 8. V027_Week6, shared slice positions and display window; MRI, reference, CAN3D prediction/errors, U-Net prediction/errors.](figures/final_compare_V027_Week6.png)
+
+Full-field panels: [CAN3D](figures/final_can3d_V027_Week6.png), [2D U-Net](figures/final_unet2d_V027_Week6.png).
+
+## 7. Engineering recommendation and limitations
+
+For a prostate-focused research prototype on this data distribution, carry CAN3D forward for supervised evaluation: it has higher held-out prostate Dice in five of six patient groups, a small parameter count and a modest absolute inference-memory requirement on the tested A100. Retain U-Net as a lower-memory comparator and a stronger option for the other evaluated foreground structures. This is a task-dependent choice, not a universal replacement recommendation.
+
+Neither model is ready for unattended radiotherapy contour drafting. Excess contours in T014/J026 and missed or misplaced terminal sections in K008/S028/V027 require review and correction. A prospective imaging-specialist study should measure correction time and clinically important boundary errors before claiming operational benefit. Full-volume Dice and a course target cannot establish clinical safety or workflow utility.
+
+The main limitations are six filename-derived test groups, one seed, no external-centre validation, differing training recipes/update counts, fixed voxel shape rather than uniform physical spacing, reduced spatial resolution and evaluation on the resized grid. No original-resolution accuracy, surface-distance result, annotation-consensus study, uncertainty calibration or statistical significance is claimed. Future changes should be validated on development data and evaluated using new held-out patients; the current test results will remain a fixed report, not tuning feedback.
+
+## 8. Code, dependencies and reproducibility
+
+### 8.1 File map and input/output contract
+
+| File | Purpose |
 |---|---|
-| modules.py | 2D U-Net, soft Dice and optional Dice+CE objective; PyTorch only |
-| can3d.py / can3d_smoke.py | CAN3D adaptation and a training-only GPU feasibility diagnostic |
-| dataset.py | Inventory, patient split, integrity checks, aligned preparation and slice conversion |
-| train.py | 2D slice or 3D whole-volume fit/validation, checkpoint/resume, paired training flips and guarded final-test driver |
-| predict.py | Reload weights, predict complete cases and save masks/error panels |
-| experiment.py | Reproducibility helpers, hard metrics, case/patient aggregation and plotting |
-| validate_best.py | Fixed-checkpoint validation recheck and distinct-patient low-score panels |
-| test_dataset.py / test_modules.py / test_experiment.py | Synthetic software and numerical verification |
+| dataset.py | Pair/audit NIfTIs, create guarded patient split, aligned normalization/resizing, six-channel targets and paired augmentation |
+| modules.py / can3d.py | U-Net, CAN3D adaptation and segmentation objectives |
+| train.py | Debug/fit modes, Adam, validation selection and guarded checkpoint resumption |
+| predict.py | Reload checkpoints, complete-case predictions, resized-RAS NIfTIs and error panels |
+| experiment.py | Seeding, dispatch, hard overlap, aggregation and checkpoint helpers |
+| validate_best.py | Independent validation-only recheck of selected weights |
+| final_evaluate.py / final_evaluation_plan.json | Frozen test evaluation, hashes and repeated complete-case profiling |
+| *.slurm | Course partition/account allocation and stage launchers |
+| test_*.py | Local synthetic geometry, loss, model, resumption and evaluation-guard checks |
 
-Small aggregate evidence accompanies this report in [validation_summary.csv](results/validation_summary.csv) and [learning_history.csv](results/learning_history.csv). Downloaded raw reports, complete patient manifests and medical-volume files are kept outside the repository. Dataset and model-weight formats, runs and caches are ignored by Git.
+Inputs are paired MRI and six-code masks plus a fixed manifest. An unbatched model input is one standardized channel on a D,H,W=64,128,128 grid. Training targets are one-hot (6,D,H,W); predicted output is a six-code hard mask. Saved NIfTIs use the resized RAS X,Y,Z=128,128,64 grid and corresponding affine, not original acquisition resolution. The report panels provide concrete input/reference/prediction/error examples.
 
-### 6.2 Recorded environment and split
+### 8.2 Recorded environment and evidence
 
-The downloaded A/B configurations record Python 3.11.16, PyTorch 2.14.0+cu130, CUDA package 13.0, NumPy 2.4.6 and NiBabel 5.4.2. The setup output recorded Matplotlib 3.11.2; that package's version was not serialized in those run configurations. This distinction should be retained when reproducing the older runs.
+The final run records Python 3.11.16, PyTorch 2.14.0+cu130, NumPy 2.4.6 and NiBabel 5.4.2. The earlier remote installation log records Matplotlib 3.11.2, but its version was not serialized in the final model reports. The runtime uses the course `torch` Conda environment, one CPU thread and one A100-PCIE-40GB. Local synthetic tests use a separate environment and do not establish GPU accuracy.
 
-The fixed manifest SHA256 is `47a19c81dee93d9ddd2a920b86572bf57db240cc8a968ea731305d54a181d25e`. Each run records source hashes, model/input settings, seed, device, host and Slurm job ID. New output directories refuse overwrite, and manifests are checked for identity consistency and cross-split overlap. Runs A/B/D match the inspected manifest; A's original source hashes and D's original source hashes were independently checked against the preserved baseline revision, before CAN3D integration. D's patient-macro metrics were independently recomputed from the case records. Later code changes are recorded in progressive commits. Bitwise reproducibility across different hardware or library versions is not assumed.
+The exact split SHA256 is `47a19c81dee93d9ddd2a920b86572bf57db240cc8a968ea731305d54a181d25e`. The frozen plan stores full checkpoint and source hashes; copies were checked byte-for-byte against both downloaded test outputs. All 54 exported test predictions were checked for dimensions, RAS orientation, integer codes and per-class voxel-count agreement with JSON. Per-patient and scan-macro Dice/IoU and resource summaries were independently reaggregated. Both selected checkpoints are epoch 7. Bitwise identity across different library builds or GPUs is not promised.
 
-### 6.3 Example usage
+Small result evidence is committed in [test_summary_710105.csv](results/test_summary_710105.csv), [test_cases_710105.csv](results/test_cases_710105.csv), [test_resources_710105.csv](results/test_resources_710105.csv) and [final_test_710105.json](results/final_test_710105.json). Earlier trials are indexed in [results/EVIDENCE.md](results/EVIDENCE.md). Raw course data, NIfTI predictions, model weights, private notes and the downloaded audit archive are excluded from Git. Source MRI data are obtained through the course access process; the report figures are derived result illustrations.
 
-Commands assume a checkout containing this draft's code. Raw data must be available through the course-provided location; checkpoints are generated by training, not committed. Heavy Python commands must run in a compute allocation rather than the shared login node.
+[test_components_710105.json](results/test_components_710105.json) records descriptive connected-component sizes for the five prostate examples using six-neighbour face adjacency on the full resized predictions. This post-hoc measurement describes small islands; it does not modify masks or tune a component-removal rule from the test set.
 
-Inside an allocated CPU shell with the course `torch` environment active, a fresh working directory can prepare the deterministic split:
+### 8.3 Reproduction and usage
+
+Run heavy Python operations in an allocated compute shell, not on the login node. Activate the existing course environment; install the recorded plotting/NIfTI dependencies only if missing. From this project directory, a fresh experiment can create the patient manifest and audit a case:
 
 ```bash
+source "$HOME/miniconda3/bin/activate"
+conda activate torch
 mkdir -p runs
 python dataset.py --split runs/split_seed42.json
 python dataset.py --case B006_Week0
 ```
 
-Keep an existing saved split; do not regenerate it in response to poor results. From the project directory on the login node, submit the reproduced three-epoch balanced pilot once:
+Keep an existing saved split unchanged. The original successful recipes are `baseline_dice_ce_pilot.slurm` and `can3d_pilot.slurm`, followed by their continuation launchers. Continuation scripts reference the recorded experiment checkpoint paths; when independently retraining, set the new training/resume paths explicitly and record a new evaluation plan. Do not disable the frozen checkpoint-hash checks to mix new weights with this report's measured results.
+
+Inside a suitable compute allocation, these direct commands reproduce the two eight-epoch recipes in new directories, without relying on historical job IDs:
 
 ```bash
-sbatch baseline_balance_pilot.slurm
+python train.py --model unet2d --mode fit --device cuda --epochs 8 \
+    --batch-size 8 --learning-rate 0.001 --seed 42 --loss dice-ce \
+    --slice-sampling prostate-balanced --manifest runs/split_seed42.json \
+    --output runs/reproduction_unet2d
+python train.py --model can3d --mode fit --device cuda --epochs 8 \
+    --batch-size 1 --learning-rate 0.001 --seed 42 --loss dice-ce \
+    --flip-probability 0.5 --manifest runs/split_seed42.json \
+    --output runs/reproduction_can3d
+```
+
+For the existing recorded weights and manifest, `final_compare.slurm` reproduces the frozen evaluation in new output directories. It requires the checkpoint paths in the plan, verifies hashes, uses `--final-test` explicitly, and performs no training. Results for job 710105 are already complete; a reader does not need to resubmit just to inspect them.
+
+```bash
 squeue --me
+tail -n 40 runs/final_compare_710105.out
+tail -n 20 runs/final_compare_710105.err
 ```
 
-For job JOBID, training artifacts are under `runs/baseline_balance_JOBID/`. After generating a fit checkpoint, a validation preview can be produced inside a compute allocation:
+A validation preview in a compute allocation can use:
 
 ```bash
-python predict.py --device cpu --split validation \
-    --checkpoint runs/baseline_balance_JOBID/last.pt \
-    --output runs/validation_preview_JOBID
+python predict.py --device cuda --split validation \
+    --checkpoint runs/can3d_resume_709852/best.pt \
+    --output runs/new_validation_preview
 ```
 
-The output contains a prediction NIfTI on the resized RAS grid, a prostate input/truth/prediction/error panel and a small metrics JSON. A preview subset is not a full evaluation. The saved inspection script reproduces the two historical previews using checkpoint 704488. `baseline_dice_ce_pilot.slurm` reproduces the three-epoch D recipe; the prepared `baseline_dice_ce_resume.slurm` continues verified run 708618 to epoch 8 in a new directory, then generates training/validation previews using the validation-selected best weights. Run 709041 completed; its selected epoch-7 checkpoint was rechecked by `baseline_validate_best.slurm` in job 709282. Both launchers bundle reports/figures without model weights for a small diagnostic download.
-
-### 6.4 Code verification and its limits
-
-All thirty local tests passed using temporary synthetic fixtures, including the original 2D regression checks, two fixed-validation-driver checks, three CAN3D architecture checks and a CAN3D training/resumption/prediction integration check. They cover coordinate/grid consistency, variable-depth handling, invalid labels/intensities, split leakage, one-hot targets, known-answer Dice/IoU, patient aggregation, finite gradients, actual small optimization runs, checkpoint reload/resumption, balanced batches, loss arithmetic and guarded test access. The test command is:
+Thirty earlier local tests covered geometry/alignment, variable depth, invalid labels/intensities, patient leakage, one-hot targets, known-answer Dice/IoU, patient means, finite gradients, initialization, actual small optimization runs, exact resume behaviour and prediction exports. Two additional frozen-evaluation tests passed explicit-test/matched-example gates and both-model synthetic evaluation with training/validation files removed, unchanged weights, repeat consistency and hash/overwrite guards. These tests support implementation checks, not independent student mastery or clinical validity.
 
 ```bash
-python -m unittest -v test_dataset test_modules test_experiment test_validate_best test_can3d test_final_evaluate
+python -m unittest -v test_dataset test_modules test_experiment \
+    test_validate_best test_can3d test_final_evaluate
 ```
 
-The CAN3D integration check also matched all resumed model tensors exactly against uninterrupted fitting with the same epoch-specific flip seeds. Synthetic test outputs are not real clinical accuracy evidence.
+The student reported the compulsory check-off completed on 28 October, with no specific tutor recommendations. Original preparation content is preserved in Appendix A. GitHub push, the upstream pull request, Turnitin submission and later teaching-team code-review responses are separate submission actions; this report does not claim they are complete.
 
-Separately, real evidence includes the full 211-pair audit, a three-case prepared-data check, an A100 CUDA check, GPU debug/fit runs and the downloaded case previews. Passing software tests verifies those checked behaviours, not segmentation quality. The student's ability to explain the code is distinct from generated tests or tutor explanations.
+## 9. Artificial Intelligence Usage Disclosure
 
-### Frozen final test and resource comparison
+OpenAI Codex assisted with interpreting the task sheet and course materials, locating references, designing and drafting/refactoring the PyTorch pipeline/model/training/metric code, writing and running local synthetic tests, checking downloaded experiment reports and figures, and drafting this report. Code structure is based on U-Net [1], the declared CAN3D adaptation [2] and course concepts [5]; no pretrained weights or copied trained solution were used. Material implementation choices and adaptations are described above and in source comments.
 
-[final_evaluation_plan.json](final_evaluation_plan.json) fixes the two independently validated epoch-7 checkpoint hashes, original patient split, seed 42 and 64x128x128 input grid before test results are read. `final_compare.slurm` runs the two models in separate processes on the same allocated GPU; it performs no training. Each of 27 test scans is warmed up twice and timed three times. Reported per-case time is the median from preprocessed CPU input to a complete CPU hard mask, including transfers and argmax, excluding disk, preprocessing, metrics and plotting. Peak PyTorch allocated/reserved memory includes model and inference tensors, excluding CUDA context and other processes.
-
-The driver saves per-class Dice/IoU, patient-macro and scan-macro summaries, runtime provenance and all resized-RAS predictions. Five low-prostate-Dice CAN3D cases from different test groups are selected for panels; U-Net renders exactly the same cases. This selection describes failures and does not change either model. A fixed CAN3D-first order and different training recipes remain limitations; no test result will drive further tuning.
-
-```bash
-# Run once after uploading the frozen evaluator, plan and launcher.
-sbatch final_compare.slurm
-# Inspect the existing task; do not resubmit to view results.
-squeue --me
-tail -n 40 runs/final_compare_*.out
-tail -n 20 runs/final_compare_*.err
-```
-
-## 7. Remaining work and limitations
-
-The current evidence is limited by a small validation cohort, filename-based identity grouping, downsampled anatomy, single-seed trials and a small, deliberately selected set of inspected error cases. A/B have unequal budgets; B/D have a matched three-epoch budget but no repeat-seed uncertainty estimate. Dice+CE improves validation overlap, but the main final-test objective remains unverified. The following results are intentionally not invented in this draft:
-
-- Controlled profiling of the selected baseline, and assessment of any later changed model on fresh error examples.
-- A fixed-model 2D/3D test comparison; CAN3D continuation and complete best-checkpoint validation are finished.
-- Frozen-model test Dice/IoU and a direct 2D-versus-3D comparison.
-- Controlled full-model resource profiling and final 2D/3D failure-case comparison; the current three baseline validation cases are preliminary evidence.
-
-The student reported on 28 October that the compulsory check-off was completed and that the tutor gave no specific recommendations. Final PR/Turnitin submission and any required teaching-team code-review response remain separate from the completed consultation.
-
-## 8. Artificial Intelligence Usage Disclosure
-
-OpenAI Codex assisted with interpreting the specification and lectures, locating references, drafting/refactoring the PyTorch data/model/training/metric code, writing synthetic tests, inspecting downloaded reports and figures, and writing this report. Codex ran the local checks and made genuine milestone commits. The student executed the authenticated Rangpur commands, submitted jobs and supplied/downloaded their outputs. This is not a claim that all code was independently written or audited by the student.
-
-Verification included source/manifest hashes, known-answer calculations, synthetic integration tests and the real experiments described above. Unsuccessful results are retained, and generated proposals are separated from measured outcomes. The student remains responsible for reviewing and understanding every submitted component and this draft's claims before submission. No fellow-student code, previous-year PR implementation or pretrained model has been incorporated in the current baseline.
+The student ran the authenticated Rangpur commands, submitted jobs, downloaded outputs and reported completing check-off. Codex made genuine milestone commits and performed the local source/hash/metric checks. This is not a claim that the student independently authored or audited every line. The student remains responsible for understanding, verifying and submitting the work. Detailed local checks cannot substitute for that responsibility.
 
 ## References
 
 1. Ronneberger, O., Fischer, P. and Brox, T. (2015). [U-Net: Convolutional Networks for Biomedical Image Segmentation](https://arxiv.org/abs/1505.04597).
-2. Dai, W. et al. (2021). [CAN3D: Fast 3D Medical Image Segmentation via Compact Context Aggregation](https://arxiv.org/abs/2109.05443). Main-model reference; implemented methods-text one-downsampling adaptation with differences declared in Section 3.4.
+2. Dai, W. et al. (2021). [CAN3D: Fast 3D Medical Image Segmentation via Compact Context Aggregation](https://arxiv.org/abs/2109.05443). Main-model reference; implemented methods-text one-downsampling adaptation with differences declared in Section 3.2.
 3. Dowling, J. and Greer, P. (2021). [Labelled weekly MR images of the male pelvis](https://doi.org/10.25919/45t8-p065). CSIRO Data Collection, version 2.
 4. Dowling et al. (2015). [Automatic Substitute Computed Tomography Generation and Contouring for MRI-Alone External Beam Radiation Therapy From Standard MRI Sequences](https://doi.org/10.1016/j.ijrobp.2015.08.045). Data were provided by HipMRI Study; non-commercial educational use and acknowledgement follow the supplied data-use terms.
 5. COMP3710 (2026). Contact 6: Neural Networks; Contact 7: ConvNets, Segmentation and Object Detection. Course teaching materials.
@@ -293,7 +321,7 @@ Verification included source/manifest hashes, known-answer calculations, synthet
 
 ## Appendix A. Archived one-page feasibility review
 
-The preparation copy below is reproduced unchanged from the archived review supplied for check-off preparation. Its historical statements describe what was known then; Sections 4-7 above provide subsequent updates. The consultation was reported complete on 28 October. The original Markdown is also retained as [feasibility_review_original.md](feasibility_review_original.md), following staff guidance to keep the check-off content as a supplement.
+The original preparation text below is preserved unchanged from [feasibility_review_original.md](feasibility_review_original.md), following staff guidance [7]. Its planned tasks and unverified results are historical; Sections 3-8 give the completed experiments and current evidence. The student reported check-off complete on 28 October.
 
 # HipMRI feasibility review
 
@@ -333,21 +361,3 @@ Proposed acceptance targets:
 
 **Code and AI disclosure.** Codex assisted with course- and paper-based PyTorch code, tests and this draft.
 I ran the real-data checks and remain responsible for understanding and verifying the work.
-
-## Appendix B. Diagnostic prediction panels
-
-These are illustrative panels from two complete-case predictions using the failed Dice-only run 704488's last checkpoint. They are not predictions from the improved Dice+CE model. Columns show MRI input, manual prostate mask, predicted prostate mask and false-positive/false-negative overlays. Blue indicates missed prostate; red would indicate extra prostate. Rows show first, largest and last labelled prostate levels. These examples support the historical failure analysis in Section 5.2 and do not replace the final 3-5-case investigation.
-
-![Figure 4. Historical Dice-only B006_Week0 training case: all 1,287 prostate voxels missed; prostate Dice 0.](figures/B006_Week0_failure.png)
-
-![Figure 5. Historical Dice-only C032_Week0 validation case: all 683 prostate voxels missed; prostate Dice 0.](figures/C032_Week0_failure.png)
-
-## Appendix C. Selected best-checkpoint validation errors
-
-All three panels use the same epoch-7 checkpoint, selected by validation patient-macro prostate Dice. Red marks false positives, blue false negatives. Selection is by lowest full-case prostate Dice with different patient groups, not three slices counted as three patients.
-
-![Figure 6. C032_Week0 validation: Dice 0.5321; excess predicted extent dominates.](figures/C032_Week0_best_validation.png)
-
-![Figure 7. D031_Week6 validation: Dice 0.5932; high coverage with excess predicted volume.](figures/D031_Week6_best_validation.png)
-
-![Figure 8. K018_Week0 validation: Dice 0.5991; substantial missed prostate volume.](figures/K018_Week0_best_validation.png)

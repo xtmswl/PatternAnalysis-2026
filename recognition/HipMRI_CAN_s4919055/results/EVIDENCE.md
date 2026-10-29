@@ -1,20 +1,31 @@
-# Evidence index for the working report
+# Experiment evidence index
 
-The report's validation values are summarized in validation_summary.csv, and the curves in learning_history.csv.
+## Frozen final test: job 710105, 29 October 2026
 
-- 703884: inspected downloaded config/history/latest validation; 25 completed epochs, then TIMEOUT from student-supplied scheduler/error output.
-- 704488: inspected downloaded config/history/latest validation; 3 epochs, same fixed validation cases and manifest hash.
-- 708618: inspected downloaded config/history/latest validation; matched three-epoch Dice+CE pilot. All four source hashes and fixed B/D settings checked; patient-macro scores independently recomputed.
-- 709556: CAN3D five-step training-only feasibility result from a supplied terminal screenshot, no displayed errors; raw smoke JSON pending collection with the first full-dataset trial. No accuracy/epoch-time claim.
-- 709041: independently checked downloaded source/manifest/history/latest epoch-8 validation and best-checkpoint previews; epochs1-3 exactly retain708618 history.
-- 709282: fixed epoch-7 checkpoint provenance and full48-case metrics verified; independent patient aggregation and three distinct-patient panels inspected.
-- 708234: epochs4-8 and completion/error status from student terminal screenshots; detailed JSON pending. Blank validation-loss CSV fields mean not supplied, not zero.
-- 704533: inspected two downloaded preview JSONs, PNGs and resized-RAS NIfTI outputs; independent voxel counts match reports. CPU timings are diagnostic.
-- 700021: selected-slice training/debug and full-case preview values transcribed from user-supplied logs; not a validation/test benchmark.
+The fixed CAN3D and U-Net epoch-7 checkpoints were evaluated on the same27 test scans/six patient groups in one A100 allocation. Exact plan bytes, all seven evaluation-source hashes, checkpoint identities and the original split were independently checked. All-class patient/scan means, repeated timing summaries and peak-memory summaries were recomputed. All54 exported predictions have matching RAS grids and class counts. Five shared case pairs (ten full-field PNGs) were visually inspected. Display zooms do not change model inputs or predictions. Six-neighbour prostate component sizes are descriptive; no test-driven filtering or retraining was applied.
 
-Raw manifests, reports, MRI volumes and model weights are not copied into this results folder. The figures are report visuals, not a redistributed training dataset. No final test results are available. The original check-off preparation content is archived separately and not rewritten as later progress.
+- test_summary_710105.csv: full precision patient/scan-macro Dice and IoU for all six classes.
+- test_cases_710105.csv: per-class case metrics and prediction counts for both models.
+- test_resources_710105.csv: parameters, mean case-median time, allocated/reserved memory and device/job provenance.
+- final_test_710105.json: selected checkpoint identities, protocol, runtime and aggregate results.
+- test_components_710105.json: descriptive disconnected-prediction component sizes.
 
-- 709710: downloaded current source hashes, fixed split, all class metrics and two PNG/NIfTI previews independently verified; raw709556smoke JSON also checked. Details: [CAN3D pilot](can3d_pilot_709710.md).
+## Historical development evidence
 
-- 709852: all five training-source hashes and exact48-case split verified; eight-epoch history and best epoch-7 full-validation class metrics independently reaggregated; three distinct-patient panels inspected. C032 independent preview agrees for all six classes. See [continuation evidence](can3d_resume_709852.md).
-- Frozen final evaluation plan: both epoch-7 checkpoint hashes and the original27-scan/six-group test cohort are declared before testing. Final GPU/test results remain pending.
+| Job | Evidence and interpretation |
+|---|---|
+| 696947 | Tiny CUDA diagnostic; not model accuracy or CAN3D memory needs |
+| 699944 | Three training-volume loader checks; duplicate699945 cancelled |
+| 700021 | Selected-training-slice overfit/debug, not held-out validation |
+| 703884 | All-slice Dice-only baseline;25 completed epochs then TIMEOUT; downloaded history/latest validation |
+| 704488 | Matched three-epoch balanced-slice Dice-only baseline; downloaded reports |
+| 704533 | Two historical failed-model prediction panels/NIfTIs; CPU diagnostic |
+| 708234 | Dice-only continuation through epoch8; screenshot evidence only, detailed JSON unavailable |
+| 708618 | Fresh matched three-epoch balanced Dice+CE pilot; source hashes checked against preserved50e8ee7 revision |
+| 709041 | U-Net continuation through epoch8; retained first3epoch history checked |
+| 709282 | Complete48-scan revalidation of U-Net bestepoch7; three distinct validation-case panels |
+| 709556 | Five-step CAN3D training-only smoke; raw JSON checked against preserved source revision |
+| 709710 | Three-epoch CAN3D whole-volume pilot, exact manifest/source and full validation checked; see can3d_pilot_709710.md |
+| 709852 | CAN3D continuation through epoch8, bestepoch7 full validation and three inspected low-case panels; see can3d_resume_709852.md |
+
+Validation values in validation_summary.csv and learning_history.csv are historical, and must not be relabelled as test metrics. Exact downloaded MRI/prediction/weight files and audit notes remain outside Git. Small result figures/CSV/JSON are report evidence. The original one-page feasibility text remains unchanged in feasibility_review_original.md.
