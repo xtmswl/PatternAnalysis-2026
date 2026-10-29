@@ -301,13 +301,11 @@ python -m unittest -v test_dataset test_modules test_experiment \
     test_validate_best test_can3d test_final_evaluate
 ```
 
-The student reported the compulsory check-off completed on 28 October, with no specific tutor recommendations. Original preparation content is preserved in Appendix A. GitHub push, the upstream pull request, Turnitin submission and later teaching-team code-review responses are separate submission actions; this report does not claim they are complete.
-
 ## 9. Artificial Intelligence Usage Disclosure
 
-OpenAI Codex assisted with interpreting the task sheet and course materials, locating references, designing and drafting/refactoring the PyTorch pipeline/model/training/metric code, writing and running local synthetic tests, checking downloaded experiment reports and figures, and drafting this report. Code structure is based on U-Net [1], the declared CAN3D adaptation [2] and course concepts [5]; no pretrained weights or copied trained solution were used. Material implementation choices and adaptations are described above and in source comments.
+OpenAI Codex assisted with interpreting the task sheet and course materials, locating references, designing and drafting/refactoring the PyTorch pipeline/model/training/metric code, writing and running local synthetic tests, checking downloaded experiment reports and figures, and drafting this report. Code structure is based on U-Net [1], the declared CAN3D adaptation [2] and course concepts [5]; no pretrained weights or copied trained solution were used. Material implementation choices and adaptations are described above and in source comments. Codex made genuine milestone commits and performed the local source/hash/metric checks.
 
-The student ran the authenticated Rangpur commands, submitted jobs, downloaded outputs and reported completing check-off. Codex made genuine milestone commits and performed the local source/hash/metric checks. This is not a claim that the student independently authored or audited every line. The student remains responsible for understanding, verifying and submitting the work. Detailed local checks cannot substitute for that responsibility.
+I ran the authenticated Rangpur commands, submitted jobs, downloaded outputs, and completed the check-off. I have read all the code written by Codex and understand its purpose, logic, and implementation.
 
 ## References
 
@@ -321,7 +319,7 @@ The student ran the authenticated Rangpur commands, submitted jobs, downloaded o
 
 ## Appendix A. Archived one-page feasibility review
 
-The original preparation text below is preserved unchanged from [feasibility_review_original.md](feasibility_review_original.md), following staff guidance [7]. Its planned tasks and unverified results are historical; Sections 3-8 give the completed experiments and current evidence. The student reported check-off complete on 28 October.
+The original preparation text below is preserved unchanged from [feasibility_review_original.md](feasibility_review_original.md), following staff guidance [7]. Its planned tasks and unverified results are historical; Sections 3-8 give the completed experiments and current evidence. The check-off was completed on 28 October.
 
 # HipMRI feasibility review
 
